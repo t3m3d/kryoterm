@@ -1,0 +1,8 @@
+kryoterm
+kryoterm.exe
+*.o
+*.obj
+*.exe.manifest
+.work-linux/
+build-linux/
+*.log
