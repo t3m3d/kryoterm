@@ -76,6 +76,12 @@ func _put(grid, idx, ch) {
     emit substring(grid, 0, idx) + ch + substring(grid, idx + 1, len(grid))
 }
 
+// _scrollUp(g, cols, total, fillRow) — drop the top row, append a blank bottom
+// row. Used when output runs past the last line (real terminal scrolling).
+func _scrollUp(g, cols, total, fillRow) {
+    emit substring(g, cols, total) + fillRow
+}
+
 // _applySgr(pen, params) — fold an SGR parameter list (e.g. "1;31;44") into the
 // colour pen. The pen packs fg+bg as fg*256+bg (sentinel 1 = default for each).
 // Handles reset (0 / empty), fg 30-37 / 39 / bright 90-97, bg 40-47 / 49 / bright
@@ -189,7 +195,16 @@ func renderGrid(s, cols, rows) {
                 }
             }
         } else {
-            if c == 10 { cr = cr + 1  cc = 0  if cr >= rows { cr = rows - 1 }  i = i + 1 }   // LF → newline (col reset, matches brain)
+            if c == 10 {                                                         // LF → newline (col reset, matches brain)
+                cr = cr + 1  cc = 0
+                if cr >= rows {
+                    grid = _scrollUp(grid, cols, total, _blank(cols))
+                    attr = _scrollUp(attr, cols, total, _fill1(cols))
+                    battr = _scrollUp(battr, cols, total, _fill1(cols))
+                    cr = rows - 1
+                }
+                i = i + 1
+            }
             else {
                 if c == 13 { cc = 0  i = i + 1 }                                     // CR
                 else {
@@ -207,7 +222,15 @@ func renderGrid(s, cols, rows) {
                                 attr = _put(attr, idx, fromCharCode(pfg))
                                 battr = _put(battr, idx, fromCharCode(pen - pfg * 256))
                                 cc = cc + 1
-                                if cc >= cols { cc = 0  cr = cr + 1  if cr >= rows { cr = rows - 1 } }
+                                if cc >= cols {
+                                    cc = 0  cr = cr + 1
+                                    if cr >= rows {
+                                        grid = _scrollUp(grid, cols, total, _blank(cols))
+                                        attr = _scrollUp(attr, cols, total, _fill1(cols))
+                                        battr = _scrollUp(battr, cols, total, _fill1(cols))
+                                        cr = rows - 1
+                                    }
+                                }
                             }
                             i = i + 1
                         }
