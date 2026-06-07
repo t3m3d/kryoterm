@@ -36,45 +36,34 @@ static void glog(const char *fmt, ...) {
     fputc('\n', f); fflush(f);
 }
 
-// SGR foreground code (30-37 / 90-97 / 39) -> NSColor.
-static NSColor *fgColor(int code) {
-    switch (code) {
-        case 30: return [NSColor colorWithCalibratedRed:0.30 green:0.30 blue:0.30 alpha:1];
-        case 31: return [NSColor colorWithCalibratedRed:0.91 green:0.30 blue:0.24 alpha:1];
-        case 32: return [NSColor colorWithCalibratedRed:0.40 green:0.78 blue:0.31 alpha:1];
-        case 33: return [NSColor colorWithCalibratedRed:0.90 green:0.76 blue:0.20 alpha:1];
-        case 34: return [NSColor colorWithCalibratedRed:0.36 green:0.55 blue:0.95 alpha:1];
-        case 35: return [NSColor colorWithCalibratedRed:0.78 green:0.40 blue:0.85 alpha:1];
-        case 36: return [NSColor colorWithCalibratedRed:0.27 green:0.78 blue:0.78 alpha:1];
-        case 37: return [NSColor colorWithCalibratedRed:0.85 green:0.85 blue:0.85 alpha:1];
-        case 90: return [NSColor colorWithCalibratedRed:0.50 green:0.50 blue:0.50 alpha:1];
-        case 91: return [NSColor colorWithCalibratedRed:1.00 green:0.45 blue:0.40 alpha:1];
-        case 92: return [NSColor colorWithCalibratedRed:0.55 green:0.95 blue:0.45 alpha:1];
-        case 93: return [NSColor colorWithCalibratedRed:1.00 green:0.90 blue:0.40 alpha:1];
-        case 94: return [NSColor colorWithCalibratedRed:0.50 green:0.70 blue:1.00 alpha:1];
-        case 95: return [NSColor colorWithCalibratedRed:0.90 green:0.55 blue:0.95 alpha:1];
-        case 96: return [NSColor colorWithCalibratedRed:0.45 green:0.95 blue:0.95 alpha:1];
-        case 97: return [NSColor colorWithCalibratedRed:1.00 green:1.00 blue:1.00 alpha:1];
-        default: return [NSColor colorWithCalibratedRed:0.82 green:0.84 blue:0.80 alpha:1]; // 39 default
+// xterm256(n) — the xterm 256-colour palette index -> NSColor. term.k re-emits
+// every colour as 38;5;N / 48;5;N, mapping basic codes to indices 0-15.
+static NSColor *xterm256(int n) {
+    static const unsigned char base[16][3] = {
+        {0,0,0},{205,49,49},{13,188,121},{229,229,16},{36,114,200},{188,63,188},{17,168,205},{204,204,204},
+        {102,102,102},{241,76,76},{35,209,139},{245,245,67},{59,142,234},{214,112,214},{41,184,219},{255,255,255}
+    };
+    if (n < 0) n = 7;
+    if (n < 16)
+        return [NSColor colorWithCalibratedRed:base[n][0]/255.0 green:base[n][1]/255.0 blue:base[n][2]/255.0 alpha:1];
+    if (n < 232) {
+        int m = n - 16, lv[6] = {0,95,135,175,215,255};
+        return [NSColor colorWithCalibratedRed:lv[m/36]/255.0 green:lv[(m/6)%6]/255.0 blue:lv[m%6]/255.0 alpha:1];
     }
+    int v = 8 + (n - 232) * 10;
+    return [NSColor colorWithCalibratedRed:v/255.0 green:v/255.0 blue:v/255.0 alpha:1];
 }
+static NSColor *defaultFg(void) { return [NSColor colorWithCalibratedRed:0.82 green:0.84 blue:0.80 alpha:1]; }
 
-// bgColor(code) — SGR background code (40-47 / 100-107) -> NSColor (nil = default).
-static NSColor *bgColor(int code) {
-    if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) return fgColor(code - 10);
-    return nil;
-}
-
-// append a run with fg + (optional) bg color.
+// append a run with fg + (optional) bg colour. fg/bg = -1 default, else palette index.
 static void appendRun(NSMutableAttributedString *out, const unsigned char *b,
                       NSUInteger start, NSUInteger len, int fg, int bg, NSFont *font) {
     if (len == 0) return;
     NSString *s = [[NSString alloc] initWithBytes:b+start length:len encoding:NSUTF8StringEncoding];
     if (!s) return;
-    NSMutableDictionary *attrs = [@{ NSForegroundColorAttributeName: fgColor(fg),
+    NSMutableDictionary *attrs = [@{ NSForegroundColorAttributeName: (fg < 0 ? defaultFg() : xterm256(fg)),
                                      NSFontAttributeName: font } mutableCopy];
-    NSColor *bc = bgColor(bg);
-    if (bc) attrs[NSBackgroundColorAttributeName] = bc;
+    if (bg >= 0) attrs[NSBackgroundColorAttributeName] = xterm256(bg);
     [out appendAttributedString:[[NSAttributedString alloc] initWithString:s attributes:attrs]];
 }
 
@@ -89,21 +78,25 @@ static NSAttributedString *parseFrame(NSData *data) {
     NSMutableAttributedString *out = [[NSMutableAttributedString alloc] init];
     const unsigned char *b = data.bytes;
     NSUInteger n = data.length, i = 0, runStart = 0;
-    int curFg = 39, curBg = 49;
+    int curFg = -1, curBg = -1;          // -1 = default; else palette index 0-255
     while (i < n) {
         if (b[i] == 0x1b && i + 1 < n && b[i+1] == '[') {
             appendRun(out, b, runStart, i - runStart, curFg, curBg, font);
-            NSUInteger j = i + 2; int code = 0, have = 0, newFg = curFg, newBg = curBg;
+            NSUInteger j = i + 2; int code = 0, have = 0, newFg = curFg, newBg = curBg, stage = 0;
             while (j < n) {
                 unsigned char p = b[j];
                 if (p >= '0' && p <= '9') { code = code*10 + (p - '0'); have = 1; }
                 else if (p == ';' || (p >= 0x40 && p <= 0x7e)) {
                     if (have || p == 'm') {
-                        if (code == 0) { newFg = 39; newBg = 49; }
-                        else if (code == 39) newFg = 39;
-                        else if ((code>=30&&code<=37) || (code>=90&&code<=97)) newFg = code;
-                        else if (code == 49) newBg = 49;
-                        else if ((code>=40&&code<=47) || (code>=100&&code<=107)) newBg = code;
+                        if (stage == 2) { newFg = code; stage = 0; }       // 38;5;N
+                        else if (stage == 4) { newBg = code; stage = 0; }  // 48;5;N
+                        else if (stage == 1) { stage = (code == 5) ? 2 : 0; }
+                        else if (stage == 3) { stage = (code == 5) ? 4 : 0; }
+                        else if (code == 0) { newFg = -1; newBg = -1; }
+                        else if (code == 38) stage = 1;
+                        else if (code == 48) stage = 3;
+                        else if (code == 39) newFg = -1;
+                        else if (code == 49) newBg = -1;
                     }
                     code = 0; have = 0;
                     if (p >= 0x40 && p <= 0x7e) { if (p == 'm') { curFg = newFg; curBg = newBg; } j++; break; }

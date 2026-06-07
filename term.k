@@ -132,19 +132,30 @@ func _applySgr(pen, params) {
     let i = 0
     let cur = 0
     let any = 0
+    // fg/bg encoded as a 256-colour index: 1 = default, 2..255 = index 0..253.
+    // stage drives the 38;5;N / 48;5;N (256-colour) sub-sequences.
+    let stage = 0                            // 0 normal; 1 got 38; 2 got 38;5; 3 got 48; 4 got 48;5
     while i <= n {
         let sep = 0
         if i == n { sep = 1 }
         else { if charCode(substring(params, i, i + 1)) == 59 { sep = 1 } }
         if sep == 1 {
             if any == 1 {
-                if cur == 0 { fg = 1  bg = 1 }
-                if cur == 39 { fg = 1 }
-                if cur >= 30 && cur <= 37 { fg = cur }
-                if cur >= 90 && cur <= 97 { fg = cur }
-                if cur == 49 { bg = 1 }
-                if cur >= 40 && cur <= 47 { bg = cur }
-                if cur >= 100 && cur <= 107 { bg = cur }
+                if stage == 2 { let x = cur  if x > 253 { x = 253 }  fg = x + 2  stage = 0 }
+                else { if stage == 4 { let x = cur  if x > 253 { x = 253 }  bg = x + 2  stage = 0 }
+                else { if stage == 1 { if cur == 5 { stage = 2 } else { stage = 0 } }
+                else { if stage == 3 { if cur == 5 { stage = 4 } else { stage = 0 } }
+                else {
+                    if cur == 0 { fg = 1  bg = 1 }
+                    if cur == 38 { stage = 1 }
+                    if cur == 48 { stage = 3 }
+                    if cur == 39 { fg = 1 }
+                    if cur >= 30 && cur <= 37 { fg = cur - 28 }      // index 0-7
+                    if cur >= 90 && cur <= 97 { fg = cur - 80 }      // index 8-15
+                    if cur == 49 { bg = 1 }
+                    if cur >= 40 && cur <= 47 { bg = cur - 38 }      // index 0-7
+                    if cur >= 100 && cur <= 107 { bg = cur - 90 }    // index 8-15
+                } } } }
             }
             cur = 0
             any = 0
@@ -157,12 +168,13 @@ func _applySgr(pen, params) {
     emit fg * 256 + bg
 }
 
-// _sgrPair(fg, bg) — ANSI to set (fg,bg); 1 = default. Reset-then-set.
+// _sgrPair(fg, bg) — ANSI to set (fg,bg); 1 = default, else 256-colour index+2.
+// Re-emitted as 256-colour so the shim renders the exact palette. Reset-then-set.
 func _sgrPair(fg, bg) {
     let e = fromCharCode(27)
     let s = e + "[0m"
-    if fg != 1 { s = s + e + "[" + (fg + 0) + "m" }
-    if bg != 1 { s = s + e + "[" + (bg + 0) + "m" }
+    if fg != 1 { s = s + e + "[38;5;" + (fg - 2) + "m" }
+    if bg != 1 { s = s + e + "[48;5;" + (bg - 2) + "m" }
     emit s
 }
 
