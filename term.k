@@ -450,6 +450,13 @@ func gridSafeLen(s) {
     emit utfCut
 }
 
+// gridCursor(state, cols, rows) — the cursor position as "row,col" (0-based).
+func gridCursor(state, cols, rows) {
+    let total = cols * rows
+    let tail = substring(state, 7 * total + 1, len(state))
+    emit _cf(tail, 0) + "," + _cf(tail, 1)
+}
+
 // renderGrid(s, cols, rows) — one-shot: feed s into a fresh grid, render to text.
 func renderGrid(s, cols, rows) {
     emit gridRender(gridFeed(gridNew(cols, rows), s, cols, rows), cols, rows)

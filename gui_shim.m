@@ -25,6 +25,10 @@
 static int   gMaster = -1;   // pipe to kryoterm's stdin  (write keystrokes)
 static int   gReadFd = -1;   // pipe from kryoterm's stdout (read frames)
 static pid_t gChild  = -1;
+static int   gCurRow = 0, gCurCol = 0;   // cursor cell (from each frame's header)
+static NSFont *gFont;
+static CGFloat gCharW = 7.8, gLineH = 15.5;
+static const CGFloat kPadX = 6, kPadY = 4;   // text origin inside the view
 
 // Debug log (an agent can't see the window; this is how we diagnose). Tail it:
 //   tail -f /tmp/kryoterm-gui.log
@@ -123,11 +127,7 @@ static void appendRun(NSMutableAttributedString *out, const unsigned char *b,
 // Parse one frame's text (plain text + SGR escapes) into a coloured attributed
 // string. term.k already resolved cursor/erase, so only `ESC[..m` appears.
 static NSAttributedString *parseFrame(NSData *data) {
-    // A Nerd Font so powerline/git/powerlevel10k icon glyphs (private-use
-    // codepoints) render instead of missing-glyph boxes. Falls back to Menlo.
-    NSFont *font = [NSFont fontWithName:@"JetBrainsMono Nerd Font Mono" size:13]
-                ?: [NSFont fontWithName:@"Menlo" size:13]
-                ?: [NSFont userFixedPitchFontOfSize:13];
+    NSFont *font = gFont;
     NSMutableAttributedString *out = [[NSMutableAttributedString alloc] init];
     const unsigned char *b = data.bytes;
     NSUInteger n = data.length, i = 0, runStart = 0;
@@ -175,7 +175,12 @@ static NSAttributedString *parseFrame(NSData *data) {
 - (void)drawRect:(NSRect)dirty {
     [(gCurBg ?: [NSColor blackColor]) set];
     NSRectFill(self.bounds);
-    if (self.attr) [self.attr drawAtPoint:NSMakePoint(6, 4)];
+    if (self.attr) [self.attr drawAtPoint:NSMakePoint(kPadX, kPadY)];
+    // thin vertical-bar cursor at the shell's cursor cell (only when focused)
+    if (self.window.isKeyWindow) {
+        [[NSColor colorWithCalibratedRed:0.85 green:0.87 blue:0.83 alpha:0.95] set];
+        NSRectFill(NSMakeRect(kPadX + gCurCol * gCharW, kPadY + gCurRow * gLineH, 2.0, gLineH));
+    }
 }
 - (void)keyDown:(NSEvent *)e {
     if (gMaster < 0) return;
@@ -228,9 +233,26 @@ static void applyColors(void) {
             if (buf[i] == 0x0c) {                       // form feed -> frame boundary
                 NSData *snapshot = [frame copy];
                 nframes++;
-                glog("frame #%d (%lu bytes)", nframes, (unsigned long)snapshot.length);
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    gView.attr = parseFrame(snapshot);
+                    // Strip the SOH-delimited cursor header (SOH "row,col" SOH ...).
+                    NSData *body = snapshot;
+                    const unsigned char *p = snapshot.bytes;
+                    NSUInteger len = snapshot.length;
+                    if (len > 0 && p[0] == 1) {
+                        NSUInteger k = 1;
+                        while (k < len && p[k] != 1) k++;
+                        if (k < len) {
+                            int cr = 0, cc = 0, sawComma = 0;
+                            for (NSUInteger m = 1; m < k; m++) {
+                                if (p[m] == ',') sawComma = 1;
+                                else if (p[m] >= '0' && p[m] <= '9')
+                                    { if (sawComma) cc = cc*10 + (p[m]-'0'); else cr = cr*10 + (p[m]-'0'); }
+                            }
+                            gCurRow = cr; gCurCol = cc;
+                            body = [snapshot subdataWithRange:NSMakeRange(k+1, len-(k+1))];
+                        }
+                    }
+                    gView.attr = parseFrame(body);
                     [gView setNeedsDisplay:YES];
                 });
                 [frame setLength:0];
@@ -273,6 +295,13 @@ int main(int argc, const char *argv[]) {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         loadConfig();
+        // A Nerd Font so powerline/git icon glyphs render; cache its cell metrics
+        // for cursor placement (monospace advance + default line height).
+        gFont = [NSFont fontWithName:@"JetBrainsMono Nerd Font Mono" size:13]
+             ?: [NSFont fontWithName:@"Menlo" size:13]
+             ?: [NSFont userFixedPitchFontOfSize:13];
+        gCharW = gFont.maximumAdvancement.width;
+        gLineH = [[NSLayoutManager new] defaultLineHeightForFont:gFont];
 
         NSRect frame = NSMakeRect(0, 0, 830, 500);   // ~104x30 at Menlo 13
         NSWindow *win = [[NSWindow alloc]

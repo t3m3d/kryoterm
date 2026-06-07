@@ -106,7 +106,10 @@ func kryoterm_interactive(shellPath, cols, rows) {
             }
         }
         if dirty == 1 && quiet >= 2 {       // output settled -> one coalesced frame
-            let frame = gridRender(st, cols, rows) + ff
+            // frame = SOH cursor("row,col") SOH grid-text \f. The shim strips the
+            // SOH-delimited cursor header and draws a cursor there.
+            let soh = fromCharCode(1)
+            let frame = soh + gridCursor(st, cols, rows) + soh + gridRender(st, cols, rows) + ff
             // write() to a pty can be PARTIAL (small kernel buffer); loop or the
             // frame (and its terminating \f) gets truncated and the shim never
             // sees a complete frame.
