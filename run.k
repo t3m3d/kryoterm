@@ -130,7 +130,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
 just run {
     let n = argCount()
     if n >= 1 && arg(0) == "-i" {
-        kryoterm_interactive("/bin/zsh", 90, 30)
+        kryoterm_interactive("/bin/zsh", 104, 30)
     } else {
         print("kryoterm — pure-Krypton terminal (live PTY engine)")
         print("--------------------------------------------------")

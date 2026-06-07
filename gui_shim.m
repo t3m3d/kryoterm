@@ -185,7 +185,7 @@ int main(int argc, const char *argv[]) {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
-        NSRect frame = NSMakeRect(0, 0, 720, 500);   // ~90x30 at Menlo 13
+        NSRect frame = NSMakeRect(0, 0, 830, 500);   // ~104x30 at Menlo 13
         NSWindow *win = [[NSWindow alloc]
             initWithContentRect:frame
                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
