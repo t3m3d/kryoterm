@@ -62,7 +62,12 @@ static NSColor *fgColor(int code) {
 // Parse one frame's text (plain text + SGR escapes) into a coloured attributed
 // string. term.k already resolved cursor/erase, so only `ESC[..m` appears.
 static NSAttributedString *parseFrame(NSData *data) {
-    NSFont *font = [NSFont fontWithName:@"Menlo" size:13] ?: [NSFont userFixedPitchFontOfSize:13];
+    // A Nerd Font so powerline/git/powerlevel10k icon glyphs (private-use
+    // codepoints) render instead of missing-glyph boxes. Falls back to Menlo.
+    NSFont *font = [NSFont fontWithName:@"JetBrainsMono Nerd Font Mono" size:13]
+                ?: [NSFont fontWithName:@"JetBrainsMonoNF-Regular" size:13]
+                ?: [NSFont fontWithName:@"Menlo" size:13]
+                ?: [NSFont userFixedPitchFontOfSize:13];
     NSMutableAttributedString *out = [[NSMutableAttributedString alloc] init];
     const unsigned char *b = data.bytes;
     NSUInteger n = data.length, i = 0, runStart = 0;
