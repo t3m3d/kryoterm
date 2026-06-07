@@ -37,3 +37,27 @@ func ptyWrite(m, s) {
 func ptyClose(m) {
     emit fdClose(m)
 }
+
+// ptySetNonblock(m) — switch the master to non-blocking: ptyRead then returns ""
+// immediately when no output is pending (instead of blocking). Use for a
+// poll/render loop that must also accept keystrokes.
+func ptySetNonblock(m) {
+    emit fdSetNonblock(m)
+}
+
+// ptyDrain(m, polls) — poll-read the master `polls` times at 5ms spacing,
+// concatenating everything available. On a non-blocking master an empty read
+// means "nothing right now"; the 5ms pace (sleepNs) lets slow command output
+// land without busy-spinning. polls*5ms = total wait window (e.g. 400 -> ~2s).
+// Returns the accumulated output for term.k's renderGrid.
+func ptyDrain(m, polls) {
+    let sb = sbNew()
+    let i = 0
+    while i < polls {
+        let chunk = fdRead(m, 4096)
+        if len(chunk) > 0 { sb = sbAppend(sb, chunk) }
+        sleepUs(0, 5000)
+        i += 1
+    }
+    emit sbToString(sb)
+}
