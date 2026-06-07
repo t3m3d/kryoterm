@@ -6,3 +6,6 @@ kryoterm.exe
 .work-linux/
 build-linux/
 *.log
+
+kryoterm-gui
+kryoterm
