@@ -46,10 +46,47 @@ func kryoterm_loop(cmd) {
     emit 0
 }
 
-// Entry when run.k is the build target directly.
+// Phase-4 INTERACTIVE bridge (drives the GUI shim). Spawns a shell on a pty and
+// runs a poll loop: keystrokes arrive on stdin (from the window), get forwarded
+// to the shell; the shell's output is fed into the incremental grid and the
+// whole frame is written to stdout (prefixed with a form-feed, the shim's
+// "clear and redraw" marker). Runs until the process is killed (window close) —
+// macho has no waitpid builtin to detect shell exit. cols×rows fixed at 80×24.
+func kryoterm_interactive(shellPath, cols, rows) {
+    let m = ptyOpen(shellPath)
+    ptySetNonblock(m)
+    fdSetNonblock(0)                       // stdin (keys from the window)
+    let st = gridNew(cols, rows)
+    let ff = fromCharCode(12)              // frame marker: shim clears + redraws
+    // NOTE: a loop-invariant `while go == 1` MISCOMPILES on the macho backend
+    // (the loop body never runs). Use a large bounded counter that changes each
+    // iteration (2e9 * 8ms ≈ months — effectively unbounded for a session).
+    let i = 0
+    while i < 2000000000 {
+        let keys = fdRead(0, 4096)
+        if len(keys) > 0 { fdWrite(m, keys, len(keys)) }
+        let out = fdRead(m, 65536)
+        if len(out) > 0 {
+            st = gridFeed(st, out, cols, rows)
+            let frame = ff + gridRender(st, cols, rows)
+            fdWrite(1, frame, len(frame))
+        }
+        sleepUs(0, 8000)                   // ~8ms poll
+        i = i + 1
+    }
+    emit 0
+}
+
+// Entry when run.k is the build target directly. `-i` = interactive bridge mode
+// (the GUI shim runs `kryoterm -i`); otherwise a one-shot demo session.
 just run {
-    print("kryoterm — pure-Krypton terminal (live PTY engine)")
-    print("--------------------------------------------------")
-    kryoterm_loop("uname -srm; pwd; echo kryoterm-ok")
-    print("--------------------------------------------------")
+    let n = argCount()
+    if n >= 1 && arg(0) == "-i" {
+        kryoterm_interactive("/bin/zsh", 80, 24)
+    } else {
+        print("kryoterm — pure-Krypton terminal (live PTY engine)")
+        print("--------------------------------------------------")
+        kryoterm_loop("uname -srm; pwd; echo kryoterm-ok")
+        print("--------------------------------------------------")
+    }
 }
