@@ -5,15 +5,22 @@
 // BS/TAB, SGR fg+bg colour, scroll-on-overflow — then renders the grid back to
 // text (re-emitting ANSI colour). Krypton port of brain/terk's Grid + applyEscape.
 //
-// Three parallel FLAT strings. The CHARACTER grid uses 5-byte slots per cell:
-// [width][b0][b1][b2][b3], width 1-4 = how many of the following bytes are the
-// cell's UTF-8 character (rest padded with SOH). This lets a multi-byte UTF-8
-// glyph occupy a single display column. The `attr` (fg) and `battr` (bg) grids
-// stay 1 byte per cell (an SGR colour code, sentinel 1 = default). Every byte
-// stored is non-NUL (Krypton string length is NUL-terminated): widths are 1-4,
-// padding is SOH(1), colour codes are >=30, UTF-8 bytes are >=0x20. Uses only
-// charCode/substring/len/sbAppend/fromCharCode — verified native builtins (k:map
-// is broken on macho). No C, no FFI, no maps. State is local to renderGrid.
+// Two representations of state:
+//   - one-shot:    renderGrid(s, cols, rows)            -> text
+//   - incremental: gridNew(cols,rows) -> state          (a packed string)
+//                  gridFeed(state, bytes, cols, rows)   -> state
+//                  gridRender(state, cols, rows)        -> text
+// The interactive loop keeps `state` across frames and feeds only the new bytes,
+// so it never re-processes the whole stream (renderGrid is O(input×gridsize)).
+//
+// The CHARACTER grid uses 5-byte slots per cell: [width][b0][b1][b2][b3], width
+// 1-4 = how many following bytes are the cell's UTF-8 character (rest SOH-padded)
+// — so a multi-byte glyph occupies one display column. `attr` (fg) and `battr`
+// (bg) grids are 1 byte/cell (SGR colour code, sentinel 1 = default). The packed
+// state string is grid+attr+battr+"|"+cr+","+cc+","+pen. Every byte is non-NUL
+// (widths 1-4, SOH pad, colour codes >=30, UTF-8 >=0x20, header is ASCII). Uses
+// only charCode/substring/len/sbAppend/fromCharCode — verified native builtins
+// (k:map is broken on macho). No C, no FFI, no maps.
 
 module kryoterm_term
 
@@ -55,6 +62,22 @@ func _clamp(v, lo, hi) {
     emit v
 }
 
+// _cf(s, k) — the k-th comma-separated non-negative integer field of s (0 if none).
+func _cf(s, k) {
+    let n = len(s)
+    let i = 0
+    let field = 0
+    let v = 0
+    while i < n {
+        let c = charCode(substring(s, i, i + 1))
+        if c == 44 { if field == k { emit v }  field = field + 1  v = 0 }
+        else { if c >= 48 && c <= 57 { v = v * 10 + (c - 48) } }
+        i = i + 1
+    }
+    if field == k { emit v }
+    emit 0
+}
+
 // _fill1(size) — a string of `size` SOH bytes (the default-colour sentinel).
 func _fill1(size) {
     let sb = sbNew()
@@ -78,8 +101,7 @@ func _blankRow(cols) {
     emit sbToString(sb)
 }
 
-// _putCell(g, cellIdx, chstr) — store the (1-4 byte) UTF-8 char `chstr` in the
-// char grid's 5-byte slot at cellIdx, padded with SOH.
+// _putCell(g, cellIdx, chstr) — store the (1-4 byte) UTF-8 char in slot cellIdx.
 func _putCell(g, cellIdx, chstr) {
     let w = len(chstr)
     let pad = ""
@@ -95,17 +117,16 @@ func _put1(g, idx, ch) {
 }
 
 // _scrollUp(g, stride, gtotal, fillRow) — drop the top row, append a fresh
-// bottom row. Generic over byte-stride (char grid = cols*5, attr = cols).
+// bottom row (generic over byte-stride: char grid = cols*5, attr = cols).
 func _scrollUp(g, stride, gtotal, fillRow) {
     emit substring(g, stride, gtotal) + fillRow
 }
 
-// _applySgr(pen, params) — fold an SGR list (e.g. "1;31;44") into the colour
-// pen, packed fg*256+bg (sentinel 1 = default each). fg 30-37/39/90-97,
-// bg 40-47/49/100-107; ignores bold/256-colour. Returns the new packed pen.
+// _applySgr(pen, params) — fold an SGR list (e.g. "1;31;44") into the colour pen
+// (fg*256+bg, sentinel 1 each): fg 30-37/39/90-97, bg 40-47/49/100-107.
 func _applySgr(pen, params) {
     let n = len(params)
-    if n == 0 { emit 257 }               // ESC[m == reset (fg=1,bg=1)
+    if n == 0 { emit 257 }
     let fg = pen / 256
     let bg = pen - fg * 256
     let i = 0
@@ -145,30 +166,37 @@ func _sgrPair(fg, bg) {
     emit s
 }
 
-// _utf8Len(c) — byte length of a UTF-8 char from its lead byte `c` (1 if not a
-// valid lead / a stray continuation).
+// _utf8Len(c) — byte length of a UTF-8 char from its lead byte (1 if invalid).
 func _utf8Len(c) {
-    if c >= 240 && c <= 247 { emit 4 }   // 0xF0-0xF7
-    if c >= 224 && c <= 239 { emit 3 }   // 0xE0-0xEF
-    if c >= 192 && c <= 223 { emit 2 }   // 0xC0-0xDF
+    if c >= 240 && c <= 247 { emit 4 }
+    if c >= 224 && c <= 239 { emit 3 }
+    if c >= 192 && c <= 223 { emit 2 }
     emit 1
 }
 
-// renderGrid(s, cols, rows) — feed byte string s into a cols×rows grid, apply
-// cursor/erase/colour/scroll, return the grid as text (rows joined by \n,
-// trailing blanks trimmed per row, fg+bg colour re-emitted as ANSI).
-func renderGrid(s, cols, rows) {
+// gridNew(cols, rows) — a fresh blank packed grid state.
+func gridNew(cols, rows) {
     let total = cols * rows
-    let grid = _blankRow(cols)           // built up to `rows` rows below
+    let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    let gtotal = total * 5
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257"
+}
+
+// gridFeed(state, s, cols, rows) — process byte string s against the packed
+// state (cursor/erase/colour/scroll), return the new packed state.
+func gridFeed(state, s, cols, rows) {
+    let total = cols * rows
+    let g5 = 5 * total
+    let gtotal = g5
     let stride = cols * 5
-    let attr = _fill1(total)             // per-cell fg (1 = default)
-    let battr = _fill1(total)            // per-cell bg (1 = default)
-    let pen = 257                        // packed fg*256+bg
-    let cr = 0
-    let cc = 0
+    let grid = substring(state, 0, g5)
+    let attr = substring(state, g5, g5 + total)
+    let battr = substring(state, g5 + total, g5 + 2 * total)
+    let tail = substring(state, g5 + 2 * total + 1, len(state))
+    let cr = _cf(tail, 0)
+    let cc = _cf(tail, 1)
+    let pen = _cf(tail, 2)
     let n = len(s)
     let i = 0
 
@@ -276,12 +304,22 @@ func renderGrid(s, cols, rows) {
         }
     }
 
-    // Render: per row, trim trailing blank cells, emit chars with colour.
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen
+}
+
+// gridRender(state, cols, rows) — render the packed state to text (rows joined
+// by \n, trailing blanks trimmed, fg+bg colour re-emitted as ANSI).
+func gridRender(state, cols, rows) {
+    let total = cols * rows
+    let g5 = 5 * total
+    let grid = substring(state, 0, g5)
+    let attr = substring(state, g5, g5 + total)
+    let battr = substring(state, g5 + total, g5 + 2 * total)
+
     let out = sbNew()
     let r = 0
     while r < rows {
         let base = r * cols
-        // trim trailing blank (width-1 space) cells
         let e = cols
         let trimming = 1
         while e > 0 && trimming == 1 {
@@ -311,4 +349,9 @@ func renderGrid(s, cols, rows) {
         r = r + 1
     }
     emit sbToString(out)
+}
+
+// renderGrid(s, cols, rows) — one-shot: feed s into a fresh grid, render to text.
+func renderGrid(s, cols, rows) {
+    emit gridRender(gridFeed(gridNew(cols, rows), s, cols, rows), cols, rows)
 }
