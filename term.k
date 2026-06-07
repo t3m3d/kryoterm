@@ -76,13 +76,15 @@ func _put(grid, idx, ch) {
     emit substring(grid, 0, idx) + ch + substring(grid, idx + 1, len(grid))
 }
 
-// _applySgr(curFg, params) — fold an SGR parameter list (e.g. "1;31") into the
-// foreground pen. Handles reset (0 / empty), default (39), 30-37, bright 90-97;
-// ignores bold/bg/256-colour for now. Returns the new fg code (1 = default).
-func _applySgr(curFg, params) {
+// _applySgr(pen, params) — fold an SGR parameter list (e.g. "1;31;44") into the
+// colour pen. The pen packs fg+bg as fg*256+bg (sentinel 1 = default for each).
+// Handles reset (0 / empty), fg 30-37 / 39 / bright 90-97, bg 40-47 / 49 / bright
+// 100-107; ignores bold/256-colour. Returns the new packed pen.
+func _applySgr(pen, params) {
     let n = len(params)
-    if n == 0 { emit 1 }                 // ESC[m == ESC[0m == reset
-    let fg = curFg
+    if n == 0 { emit 257 }               // ESC[m == ESC[0m == reset (fg=1,bg=1)
+    let fg = pen / 256
+    let bg = pen - fg * 256
     let i = 0
     let cur = 0
     let any = 0
@@ -92,10 +94,13 @@ func _applySgr(curFg, params) {
         else { if charCode(substring(params, i, i + 1)) == 59 { sep = 1 } }
         if sep == 1 {
             if any == 1 {
-                if cur == 0 { fg = 1 }
+                if cur == 0 { fg = 1  bg = 1 }
                 if cur == 39 { fg = 1 }
                 if cur >= 30 && cur <= 37 { fg = cur }
                 if cur >= 90 && cur <= 97 { fg = cur }
+                if cur == 49 { bg = 1 }
+                if cur >= 40 && cur <= 47 { bg = cur }
+                if cur >= 100 && cur <= 107 { bg = cur }
             }
             cur = 0
             any = 0
@@ -105,13 +110,17 @@ func _applySgr(curFg, params) {
         }
         i = i + 1
     }
-    emit fg
+    emit fg * 256 + bg
 }
 
-// _sgrFor(fg) — the ANSI sequence to switch the host terminal to fg (1 = reset).
-func _sgrFor(fg) {
-    if fg == 1 { emit fromCharCode(27) + "[0m" }
-    emit fromCharCode(27) + "[" + (fg + 0) + "m"
+// _sgrPair(fg, bg) — ANSI to set the host terminal to (fg,bg); 1 = default.
+// Reset-then-set so no stale attribute leaks between cells.
+func _sgrPair(fg, bg) {
+    let e = fromCharCode(27)
+    let s = e + "[0m"
+    if fg != 1 { s = s + e + "[" + (fg + 0) + "m" }
+    if bg != 1 { s = s + e + "[" + (bg + 0) + "m" }
+    emit s
 }
 
 // renderGrid(s, cols, rows) — feed byte string s into a cols×rows grid, apply
@@ -120,8 +129,9 @@ func _sgrFor(fg) {
 func renderGrid(s, cols, rows) {
     let total = cols * rows
     let grid = _blank(total)
-    let attr = _fill1(total)
-    let curFg = 1
+    let attr = _fill1(total)               // per-cell fg code (1 = default)
+    let battr = _fill1(total)              // per-cell bg code (1 = default)
+    let pen = 257                          // packed fg*256+bg, default 1*256+1
     let cr = 0
     let cc = 0
     let n = len(s)
@@ -150,14 +160,15 @@ func renderGrid(s, cols, rows) {
                         if fin == 66 { cr = _clamp(cr + p0, 0, rows - 1) }   // down
                         if fin == 67 { cc = _clamp(cc + p0, 0, cols - 1) }   // forward
                         if fin == 68 { cc = _clamp(cc - p0, 0, cols - 1) }   // back
-                        if fin == 109 { curFg = _applySgr(curFg, params) }   // 'm' SGR colour
+                        if fin == 109 { pen = _applySgr(pen, params) }       // 'm' SGR colour
                         if fin == 74 {                   // 'J' erase display (2/3 = all)
-                            if _leadInt(params, 0) >= 2 { grid = _blank(total)  attr = _fill1(total)  cr = 0  cc = 0 }
+                            if _leadInt(params, 0) >= 2 { grid = _blank(total)  attr = _fill1(total)  battr = _fill1(total)  cr = 0  cc = 0 }
                         }
                         if fin == 75 {                   // 'K' erase whole line
                             let st = cr * cols
                             grid = substring(grid, 0, st) + _blank(cols) + substring(grid, st + cols, total)
                             attr = substring(attr, 0, st) + _fill1(cols) + substring(attr, st + cols, total)
+                            battr = substring(battr, 0, st) + _fill1(cols) + substring(battr, st + cols, total)
                         }
                         i = j + 1
                     }
@@ -191,8 +202,10 @@ func renderGrid(s, cols, rows) {
                         } else {
                             if c >= 32 {                                             // printable
                                 let idx = cr * cols + cc
+                                let pfg = pen / 256
                                 grid = _put(grid, idx, substring(s, i, i + 1))
-                                attr = _put(attr, idx, fromCharCode(curFg))
+                                attr = _put(attr, idx, fromCharCode(pfg))
+                                battr = _put(battr, idx, fromCharCode(pen - pfg * 256))
                                 cc = cc + 1
                                 if cc >= cols { cc = 0  cr = cr + 1  if cr >= rows { cr = rows - 1 } }
                             }
@@ -214,14 +227,20 @@ func renderGrid(s, cols, rows) {
         let e = len(rowstr)
         while e > 0 && charCode(substring(rowstr, e - 1, e)) == 32 { e = e - 1 }
         let lastFg = 1
+        let lastBg = 1
         let col = 0
         while col < e {
             let cellFg = charCode(substring(attr, base + col, base + col + 1))
-            if cellFg != lastFg { out = sbAppend(out, _sgrFor(cellFg))  lastFg = cellFg }
+            let cellBg = charCode(substring(battr, base + col, base + col + 1))
+            if cellFg != lastFg || cellBg != lastBg {
+                out = sbAppend(out, _sgrPair(cellFg, cellBg))
+                lastFg = cellFg
+                lastBg = cellBg
+            }
             out = sbAppend(out, substring(rowstr, col, col + 1))
             col = col + 1
         }
-        if lastFg != 1 { out = sbAppend(out, fromCharCode(27) + "[0m") }
+        if lastFg != 1 || lastBg != 1 { out = sbAppend(out, fromCharCode(27) + "[0m") }
         if r < rows - 1 { out = sbAppend(out, fromCharCode(10)) }
         r = r + 1
     }
