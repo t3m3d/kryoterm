@@ -1,55 +1,55 @@
-// run.k — kryoterm core (phase 0).
+// run.k — kryoterm core (phase 3: real PTY).
 //
-// Phase 0 = bootstrap: prove kryoterm builds against Krypton, spawn one
-// child command via shellRun, echo its output, exit cleanly. No
-// window yet (waits on x11.k Phase B), no PTY yet (waits on forkpty
-// builtin in elf.k), no rendering yet (waits on x11.k Phase C).
-//
-// The function shapes here (kryoterm_spawn, kryoterm_render, kryoterm_loop)
-// are the ones the later phases will fill in. Today they're stubs;
-// run.ks calls into them so the .ks-side entry point doesn't need to
-// change as the .k side gains capability.
+// The PTY engine landed 2026-06-07: native pty/fd syscall builtins in the
+// Krypton macho backend (ptyMaster/ptySlaveName/ptyForkExec, fdRead/fdWrite/
+// fdClose, fdSetNonblock, sleepUs). kryoterm now spawns a real shell on a
+// pseudo-terminal, runs commands, and renders the live output through the grid
+// driver — all in pure Krypton, no C. The only thing left for a windowed
+// terminal is the GUI surface (objc FFI, separate track); the headless engine
+// is complete.
 
 module kryoterm
 
-// ANSI/VT parser — the pure-Krypton terminal core (platform-independent).
-// Phase 0 uses it to strip escape sequences so child output echoes cleanly;
-// later phases grow it into a full grid driver. Verified on macOS arm64.
-import "./ansi.k"
+import "./pty.k"     // PTY engine wrapper (ptyOpen/Read/Write/Drain/Close)
+import "./term.k"    // grid driver (renderGrid — ANSI/cursor/erase -> text)
 
-// Phase 0: run `cmd` via shellRun, return its stdout as a string.
-// shellRun is already in elf.k as a native syscall builtin (no C).
-// Phase 3 will replace this with a real forkpty + read loop so we
-// can drive interactive TUI programs (ncurses, vim, etc.).
-func kryoterm_spawn(cmd) {
-    emit shellRun(cmd)
+// Open a real pty and spawn `shellPath` on it. Returns the master fd.
+func kryoterm_spawn(shellPath) {
+    emit ptyOpen(shellPath)
 }
 
-// Phase 0: dump `output` to stdout. Phase 2 will swap this for
-// stdlib/x11.k ImageText8 calls so output appears in the kryoterm
-// window instead of the parent terminal.
-func kryoterm_render(output) {
-    print(stripAnsi(output))
+// Run `cmd` in a fresh shell on a pty; return the raw terminal byte stream.
+// Non-blocking + 5ms-paced reads (ptyDrain) so slow output lands without
+// hanging or busy-spinning.
+func kryoterm_run(shellPath, cmd) {
+    let nl = fromCharCode(10)
+    let m = ptyOpen(shellPath)
+    ptySetNonblock(m)
+    ptyDrain(m, 120)                 // let the shell boot (~600ms)
+    ptyWrite(m, cmd + nl + "exit" + nl)
+    let raw = ptyDrain(m, 300)       // collect output (~1.5s)
+    ptyClose(m)
+    emit raw
+}
+
+// Render raw terminal output through the grid (cols x rows).
+func kryoterm_render(raw, cols, rows) {
+    print(renderGrid(raw, cols, rows))
     emit 0
 }
 
-// Phase 0: spawn the command, render the result, exit. Phase 3+
-// turns this into a real read/render loop that polls the PTY and
-// the X11 event queue.
+// Phase-3 loop: run `cmd` in a shell on a pty, render the session in the grid.
+// (run.ks passes a parsed argv command here.)
 func kryoterm_loop(cmd) {
-    let out = kryoterm_spawn(cmd)
-    kryoterm_render(out)
+    let raw = kryoterm_run("/bin/zsh", cmd)
+    kryoterm_render(raw, 80, 24)
     emit 0
 }
 
-// Phase 0 entry — invoked directly when run.k is the build target.
-// run.ks (KryptScript front-end) calls kryoterm_loop with a parsed
-// command instead.
+// Entry when run.k is the build target directly.
 just run {
-    print("kryoterm phase 0 — bootstrap")
-    print("--------------------------")
-    kryoterm_loop("echo 'hello from a kryoterm child process'")
-    print("--------------------------")
-    print("(phase 1 = x11 window  |  phase 2 = render in window")
-    print(" phase 3 = real PTY    |  phase 4 = ANSI + scrollback)")
+    print("kryoterm — pure-Krypton terminal (live PTY engine)")
+    print("--------------------------------------------------")
+    kryoterm_loop("uname -srm; pwd; echo kryoterm-ok")
+    print("--------------------------------------------------")
 }
