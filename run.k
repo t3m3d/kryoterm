@@ -58,6 +58,16 @@ func kryoterm_interactive(shellPath, cols, rows) {
     // their config.) term.k handles enough VT (incl ESC7/8 cursor save/restore)
     // for a powerlevel10k prompt to render.
     let m = ptyOpen(shellPath)
+    // Tell the pty its real size (TIOCSWINSZ) so zsh/programs wrap at the grid
+    // width. The master ioctl ENOTTYs until the forked child has opened the
+    // slave, so retry briefly until it succeeds (returns 0). zsh then gets
+    // SIGWINCH and updates $COLUMNS/$LINES.
+    let tries = 0
+    let szdone = 0
+    while tries < 60 && szdone == 0 {
+        if ptySetSize(m, rows, cols) == 0 { szdone = 1 }
+        else { sleepUs(0, 10000)  tries = tries + 1 }
+    }
     ptySetNonblock(m)
     fdSetNonblock(0)                       // stdin (keys from the window)
     let st = gridNew(cols, rows)
