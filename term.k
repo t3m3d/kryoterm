@@ -180,7 +180,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257"
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257"
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -197,6 +197,9 @@ func gridFeed(state, s, cols, rows) {
     let cr = _cf(tail, 0)
     let cc = _cf(tail, 1)
     let pen = _cf(tail, 2)
+    let scr = _cf(tail, 3)               // saved cursor row (ESC7/ESC8)
+    let scc = _cf(tail, 4)               // saved cursor col
+    let spen = _cf(tail, 5)              // saved colour pen
     let n = len(s)
     let i = 0
 
@@ -224,6 +227,8 @@ func gridFeed(state, s, cols, rows) {
                         if fin == 67 { cc = _clamp(cc + p0, 0, cols - 1) }   // forward
                         if fin == 68 { cc = _clamp(cc - p0, 0, cols - 1) }   // back
                         if fin == 109 { pen = _applySgr(pen, params) }       // 'm' SGR colour
+                        if fin == 115 { scr = cr  scc = cc  spen = pen }     // 's' save cursor
+                        if fin == 117 { cr = scr  cc = scc  pen = spen }     // 'u' restore cursor
                         if fin == 74 {                   // 'J' erase display (2/3 = all)
                             if _leadInt(params, 0) >= 2 {
                                 grid = _blankRow(cols)
@@ -253,7 +258,11 @@ func gridFeed(state, s, cols, rows) {
                             }
                         }
                         if done == 0 { i = n }
-                    } else { i = i + 2 }                 // ESC x (2-byte)
+                    } else {
+                        if k == 55 { scr = cr  scc = cc  spen = pen }    // ESC 7 save cursor
+                        if k == 56 { cr = scr  cc = scc  pen = spen }    // ESC 8 restore cursor
+                        i = i + 2                        // ESC x (2-byte)
+                    }
                 }
             }
         } else {
@@ -304,7 +313,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen
 }
 
 // gridRender(state, cols, rows) — render the packed state to text (rows joined

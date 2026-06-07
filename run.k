@@ -53,17 +53,11 @@ func kryoterm_loop(cmd) {
 // "clear and redraw" marker). Runs until the process is killed (window close) —
 // macho has no waitpid builtin to detect shell exit. cols×rows fixed at 80×24.
 func kryoterm_interactive(shellPath, cols, rows) {
-    let nl = fromCharCode(10)
-    // Spawn a plain /bin/sh, then have it replace itself with an rc-free zsh
-    // (`zsh -f`) — a clean prompt, no .zshrc/powerlevel10k redraw storm. (The
-    // ptyForkExec builtin can't pass argv flags, so we drive it via the shell.)
-    let m = ptyOpen("/bin/sh")
-    // `clear` wipes the echoed bootstrap line (ESC[2J, which the grid honours),
-    // then exec replaces sh with an rc-free zsh — so the window opens straight to
-    // a clean `%` prompt, no sh→zsh transition scrollback.
-    let boot = "clear; exec /bin/zsh -f" + nl
-    fdWrite(m, boot, len(boot))            // BLOCKING write (before nonblock) so
-                                           // the bootstrap line can't be dropped
+    // Spawn the user's real shell so it sources ~/.zshrc — their prompt, history,
+    // aliases. (Earlier we used `zsh -f` for a clean prompt, but the user wants
+    // their config.) term.k handles enough VT (incl ESC7/8 cursor save/restore)
+    // for a powerlevel10k prompt to render.
+    let m = ptyOpen(shellPath)
     ptySetNonblock(m)
     fdSetNonblock(0)                       // stdin (keys from the window)
     let st = gridNew(cols, rows)
@@ -126,7 +120,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
 just run {
     let n = argCount()
     if n >= 1 && arg(0) == "-i" {
-        kryoterm_interactive("/bin/zsh", 80, 28)
+        kryoterm_interactive("/bin/zsh", 90, 30)
     } else {
         print("kryoterm — pure-Krypton terminal (live PTY engine)")
         print("--------------------------------------------------")
