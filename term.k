@@ -351,6 +351,68 @@ func gridRender(state, cols, rows) {
     emit sbToString(out)
 }
 
+// gridSafeLen(s) — length of the prefix of s safe to feed: excludes a trailing
+// INCOMPLETE escape sequence or UTF-8 char. The interactive bridge reads the pty
+// in arbitrary chunks that can split a sequence mid-way; feeding the partial
+// would corrupt the grid. The caller feeds s[0..gridSafeLen(s)] and carries the
+// rest over to prepend to the next chunk.
+func gridSafeLen(s) {
+    let n = len(s)
+    if n == 0 { emit 0 }
+
+    // (1) trailing partial escape: find the last ESC; cut there if incomplete.
+    let escCut = n
+    let p = n - 1
+    let lastEsc = 0 - 1
+    while p >= 0 {
+        if charCode(substring(s, p, p + 1)) == 27 { lastEsc = p  p = 0 - 1 }
+        else { p = p - 1 }
+    }
+    if lastEsc >= 0 {
+        let q = lastEsc + 1
+        if q >= n { escCut = lastEsc }                  // lone trailing ESC
+        else {
+            let k = charCode(substring(s, q, q + 1))
+            if k == 91 {                                // CSI: needs a final letter
+                let j = q + 1
+                let done = 0
+                while j < n {
+                    if _isLetter(charCode(substring(s, j, j + 1))) == 1 { done = 1  j = n }
+                    else { j = j + 1 }
+                }
+                if done == 0 { escCut = lastEsc }
+            }
+            if k == 93 {                                // OSC: needs BEL
+                let j = q + 1
+                let done = 0
+                while j < n {
+                    if charCode(substring(s, j, j + 1)) == 7 { done = 1  j = n }
+                    else { j = j + 1 }
+                }
+                if done == 0 { escCut = lastEsc }
+            }
+        }
+    }
+
+    // (2) trailing partial UTF-8 char.
+    let utfCut = n
+    let last = charCode(substring(s, n - 1, n))
+    if last >= 192 { utfCut = n - 1 }                   // lead byte at end -> incomplete
+    else {
+        if last >= 128 {                                // continuation -> find the lead
+            let lpos = n - 1
+            while lpos > 0 && charCode(substring(s, lpos, lpos + 1)) >= 128 && charCode(substring(s, lpos, lpos + 1)) <= 191 { lpos = lpos - 1 }
+            let lead = charCode(substring(s, lpos, lpos + 1))
+            if lead >= 192 {
+                if lpos + _utf8Len(lead) > n { utfCut = lpos }
+            }
+        }
+    }
+
+    if escCut < utfCut { emit escCut }
+    emit utfCut
+}
+
 // renderGrid(s, cols, rows) — one-shot: feed s into a fresh grid, render to text.
 func renderGrid(s, cols, rows) {
     emit gridRender(gridFeed(gridNew(cols, rows), s, cols, rows), cols, rows)

@@ -77,13 +77,20 @@ func kryoterm_interactive(shellPath, cols, rows) {
     // bounded counter (2e9 * 8ms ≈ months ≈ unbounded for a session).
     let dirty = 0
     let quiet = 0
+    let pending = ""                      // partial escape/UTF-8 carried between reads
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
         if len(keys) > 0 { fdWrite(m, keys, len(keys)) }
         let out = fdRead(m, 65536)
         if len(out) > 0 {
-            st = gridFeed(st, out, cols, rows)
+            // A pty read can split an escape or UTF-8 char; feed only up to the
+            // last COMPLETE unit and carry the remainder to the next read, or the
+            // grid corrupts (e.g. kryofetch's colour/box-drawing output).
+            let chunk = pending + out
+            let cut = gridSafeLen(chunk)
+            if cut > 0 { st = gridFeed(st, substring(chunk, 0, cut), cols, rows) }
+            pending = substring(chunk, cut, len(chunk))
             dirty = 1
             quiet = 0
         } else {
@@ -105,7 +112,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
 just run {
     let n = argCount()
     if n >= 1 && arg(0) == "-i" {
-        kryoterm_interactive("/bin/zsh", 80, 24)
+        kryoterm_interactive("/bin/zsh", 80, 28)
     } else {
         print("kryoterm — pure-Krypton terminal (live PTY engine)")
         print("--------------------------------------------------")
