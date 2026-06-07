@@ -48,6 +48,7 @@ static void glog(const char *fmt, ...) {
 static NSColor *gTbLight, *gTbDark, *gBgLight, *gBgDark, *gCurBg;
 static NSWindow *gWin;
 static int gBlinkMs = 530;               // cursor blink half-period; 0 = steady
+static NSTimer *gBlink;
 
 static NSColor *hexColor(const char *h, NSColor *fallback) {
     while (*h == '#' || *h == ' ' || *h == '\t') h++;
@@ -225,6 +226,19 @@ static void applyColors(void) {
     if (gView) [gView setNeedsDisplay:YES];
 }
 
+// (Re)start the blink timer for the current gBlinkMs (0 = steady, no timer).
+static void restartBlink(void) {
+    [gBlink invalidate]; gBlink = nil;
+    gCursorOn = YES;
+    if (gBlinkMs > 0) {
+        gBlink = [NSTimer scheduledTimerWithTimeInterval:gBlinkMs/1000.0 repeats:YES block:^(NSTimer *_t){
+            gCursorOn = !gCursorOn;
+            [gView setNeedsDisplay:YES];
+        }];
+    }
+    if (gView) [gView setNeedsDisplay:YES];
+}
+
 @interface Reader : NSObject
 @end
 @implementation Reader
@@ -350,13 +364,13 @@ int main(int argc, const char *argv[]) {
                  (int)([win firstResponder] == gView));
         });
 
-        // Cursor blink — interval from config (cursor_blink_ms); 0 = steady.
-        if (gBlinkMs > 0) {
-            [NSTimer scheduledTimerWithTimeInterval:gBlinkMs/1000.0 repeats:YES block:^(NSTimer *_t){
-                gCursorOn = !gCursorOn;
-                [gView setNeedsDisplay:YES];
-            }];
-        }
+        restartBlink();   // cursor blink from config (cursor_blink_ms; 0 = steady)
+
+        // Hot-reload config whenever the window regains focus.
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSWindowDidBecomeKeyNotification object:win
+                         queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *_n){ loadConfig(); applyColors(); restartBlink(); }];
 
         Reader *r = [[Reader alloc] init];
         [NSThread detachNewThreadSelector:@selector(readLoop) toTarget:r withObject:nil];
