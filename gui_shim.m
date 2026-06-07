@@ -47,6 +47,7 @@ static void glog(const char *fmt, ...) {
 // appearance live). Auto-created with defaults on first run.
 static NSColor *gTbLight, *gTbDark, *gBgLight, *gBgDark, *gCurBg;
 static NSWindow *gWin;
+static int gBlinkMs = 530;               // cursor blink half-period; 0 = steady
 
 static NSColor *hexColor(const char *h, NSColor *fallback) {
     while (*h == '#' || *h == ' ' || *h == '\t') h++;
@@ -75,7 +76,10 @@ static void loadConfig(void) {
            "titlebar_light   = #2b2b2b\n"
            "titlebar_dark    = #000000\n"
            "background_light = #2b2b2b\n"
-           "background_dark  = #000000\n";
+           "background_dark  = #000000\n"
+           "\n"
+           "# Cursor blink half-period in milliseconds (0 = steady, no blink).\n"
+           "cursor_blink_ms  = 530\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -85,7 +89,9 @@ static void loadConfig(void) {
         NSRange eq = [line rangeOfString:@"="];
         if (eq.location == NSNotFound) continue;
         NSString *k = [[line substringToIndex:eq.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        NSColor *c = hexColor([[line substringFromIndex:eq.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]].UTF8String, nil);
+        NSString *v = [[line substringFromIndex:eq.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([k isEqualToString:@"cursor_blink_ms"]) { gBlinkMs = atoi(v.UTF8String); continue; }
+        NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
         if      ([k isEqualToString:@"titlebar_light"])   gTbLight = c;
         else if ([k isEqualToString:@"titlebar_dark"])    gTbDark  = c;
@@ -344,11 +350,13 @@ int main(int argc, const char *argv[]) {
                  (int)([win firstResponder] == gView));
         });
 
-        // Cursor blink (~530ms, classic terminal cadence).
-        [NSTimer scheduledTimerWithTimeInterval:0.53 repeats:YES block:^(NSTimer *_t){
-            gCursorOn = !gCursorOn;
-            [gView setNeedsDisplay:YES];
-        }];
+        // Cursor blink — interval from config (cursor_blink_ms); 0 = steady.
+        if (gBlinkMs > 0) {
+            [NSTimer scheduledTimerWithTimeInterval:gBlinkMs/1000.0 repeats:YES block:^(NSTimer *_t){
+                gCursorOn = !gCursorOn;
+                [gView setNeedsDisplay:YES];
+            }];
+        }
 
         Reader *r = [[Reader alloc] init];
         [NSThread detachNewThreadSelector:@selector(readLoop) toTarget:r withObject:nil];
