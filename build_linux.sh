@@ -17,10 +17,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KRYPTON_ROOT="${KRYPTON_ROOT:-$SCRIPT_DIR/../krypton}"
 
-if [[ ! -x "$KRYPTON_ROOT/kcc.sh" ]]; then
-    echo "build_linux.sh: cannot find $KRYPTON_ROOT/kcc.sh" >&2
-    echo "  Set KRYPTON_ROOT to your krypton checkout, e.g." >&2
-    echo "    KRYPTON_ROOT=/path/to/krypton ./build_linux.sh" >&2
+# kcc.sh was removed upstream — resolve the kcc.ks driver: `kcc` on PATH, else
+# the Linux driver seed in the krypton checkout. (See ./build.sh for the
+# cross-platform version.)
+if command -v kcc >/dev/null 2>&1; then
+    KCC=(kcc)
+elif [[ -x "$KRYPTON_ROOT/bootstrap/kcc_driver_linux_x86_64" ]]; then
+    KCC=(env "KRYPTON_ROOT=$KRYPTON_ROOT" "$KRYPTON_ROOT/bootstrap/kcc_driver_linux_x86_64")
+else
+    echo "build_linux.sh: no 'kcc' on PATH and no $KRYPTON_ROOT/bootstrap/kcc_driver_linux_x86_64" >&2
+    echo "  Set KRYPTON_ROOT to your krypton checkout, or install Krypton." >&2
     exit 1
 fi
 
@@ -41,8 +47,8 @@ done
 
 OUT="$SCRIPT_DIR/kryoterm"
 
-echo "build_linux.sh: $SRC -> $OUT (via $KRYPTON_ROOT/kcc.sh)"
-"$KRYPTON_ROOT/kcc.sh" -o "$OUT" "$SRC"
+echo "build_linux.sh: $SRC -> $OUT"
+"${KCC[@]}" --native "$SRC" -o "$OUT"
 
 if [[ ! -x "$OUT" ]]; then
     echo "build_linux.sh: build failed — $OUT not produced" >&2
