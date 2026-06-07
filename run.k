@@ -12,6 +12,11 @@
 
 module kryoterm
 
+// ANSI/VT parser — the pure-Krypton terminal core (platform-independent).
+// Phase 0 uses it to strip escape sequences so child output echoes cleanly;
+// later phases grow it into a full grid driver. Verified on macOS arm64.
+import "./ansi.k"
+
 // Phase 0: run `cmd` via shellRun, return its stdout as a string.
 // shellRun is already in elf.k as a native syscall builtin (no C).
 // Phase 3 will replace this with a real forkpty + read loop so we
@@ -24,7 +29,7 @@ func kryoterm_spawn(cmd) {
 // stdlib/x11.k ImageText8 calls so output appears in the kryoterm
 // window instead of the parent terminal.
 func kryoterm_render(output) {
-    print(output)
+    print(stripAnsi(output))
     emit 0
 }
 
