@@ -1,18 +1,19 @@
 // term.k — kryoterm grid driver (pure Krypton terminal core, phase 4).
 //
-// The next layer up from ansi.k: maintains a rows×cols character grid with a
-// cursor and ACTS on the common VT sequences — cursor positioning
-// (CUP/CUU/CUD/CUF/CUB), erase (ED/EL), CR/LF/BS/TAB, and SGR foreground COLOR
-// — then renders the grid back to text (re-emitting ANSI color so the host
-// terminal shows it). Krypton port of brain/terk's Grid + Terminal::applyEscape.
+// Maintains a rows×cols cell grid with a cursor and ACTS on the common VT
+// sequences — cursor positioning (CUP/CUU/CUD/CUF/CUB), erase (ED/EL), CR/LF/
+// BS/TAB, SGR fg+bg colour, scroll-on-overflow — then renders the grid back to
+// text (re-emitting ANSI colour). Krypton port of brain/terk's Grid + applyEscape.
 //
-// Two parallel FLAT strings of rows*cols bytes (index = row*cols + col): `grid`
-// holds the character, `attr` holds the cell's foreground SGR code (sentinel 1 =
-// default). Uses only charCode/substring/len/sbAppend/fromCharCode — all
-// verified-working native builtins (k:map is broken on macho). No C, no FFI, no
-// maps. All state local to renderGrid (Krypton modules don't keep state across
-// the import boundary). Note attr cells use byte 1 (SOH), never 0 (NUL), since
-// Krypton string length is NUL-terminated.
+// Three parallel FLAT strings. The CHARACTER grid uses 5-byte slots per cell:
+// [width][b0][b1][b2][b3], width 1-4 = how many of the following bytes are the
+// cell's UTF-8 character (rest padded with SOH). This lets a multi-byte UTF-8
+// glyph occupy a single display column. The `attr` (fg) and `battr` (bg) grids
+// stay 1 byte per cell (an SGR colour code, sentinel 1 = default). Every byte
+// stored is non-NUL (Krypton string length is NUL-terminated): widths are 1-4,
+// padding is SOH(1), colour codes are >=30, UTF-8 bytes are >=0x20. Uses only
+// charCode/substring/len/sbAppend/fromCharCode — verified native builtins (k:map
+// is broken on macho). No C, no FFI, no maps. State is local to renderGrid.
 
 module kryoterm_term
 
@@ -54,15 +55,7 @@ func _clamp(v, lo, hi) {
     emit v
 }
 
-// _blank(size) — a string of `size` spaces.
-func _blank(size) {
-    let sb = sbNew()
-    let i = 0
-    while i < size { sb = sbAppend(sb, " ")  i = i + 1 }
-    emit sbToString(sb)
-}
-
-// _fill1(size) — a string of `size` SOH bytes (the default-foreground sentinel).
+// _fill1(size) — a string of `size` SOH bytes (the default-colour sentinel).
 func _fill1(size) {
     let sb = sbNew()
     let one = fromCharCode(1)
@@ -71,24 +64,48 @@ func _fill1(size) {
     emit sbToString(sb)
 }
 
-// _put(grid, idx, ch) — return grid with the char at flat index idx replaced.
-func _put(grid, idx, ch) {
-    emit substring(grid, 0, idx) + ch + substring(grid, idx + 1, len(grid))
+// _cellBlank() — one blank char-grid slot: width 1, a space, 3 SOH pad bytes.
+func _cellBlank() {
+    emit fromCharCode(1) + " " + fromCharCode(1) + fromCharCode(1) + fromCharCode(1)
 }
 
-// _scrollUp(g, cols, total, fillRow) — drop the top row, append a blank bottom
-// row. Used when output runs past the last line (real terminal scrolling).
-func _scrollUp(g, cols, total, fillRow) {
-    emit substring(g, cols, total) + fillRow
+// _blankRow(cols) — `cols` blank char-grid slots (cols*5 bytes).
+func _blankRow(cols) {
+    let sb = sbNew()
+    let b = _cellBlank()
+    let i = 0
+    while i < cols { sb = sbAppend(sb, b)  i = i + 1 }
+    emit sbToString(sb)
 }
 
-// _applySgr(pen, params) — fold an SGR parameter list (e.g. "1;31;44") into the
-// colour pen. The pen packs fg+bg as fg*256+bg (sentinel 1 = default for each).
-// Handles reset (0 / empty), fg 30-37 / 39 / bright 90-97, bg 40-47 / 49 / bright
-// 100-107; ignores bold/256-colour. Returns the new packed pen.
+// _putCell(g, cellIdx, chstr) — store the (1-4 byte) UTF-8 char `chstr` in the
+// char grid's 5-byte slot at cellIdx, padded with SOH.
+func _putCell(g, cellIdx, chstr) {
+    let w = len(chstr)
+    let pad = ""
+    let k = w
+    while k < 4 { pad = pad + fromCharCode(1)  k = k + 1 }
+    let off = cellIdx * 5
+    emit substring(g, 0, off) + fromCharCode(w) + chstr + pad + substring(g, off + 5, len(g))
+}
+
+// _put1(g, idx, ch) — replace the 1-byte cell at idx (attr/battr grids).
+func _put1(g, idx, ch) {
+    emit substring(g, 0, idx) + ch + substring(g, idx + 1, len(g))
+}
+
+// _scrollUp(g, stride, gtotal, fillRow) — drop the top row, append a fresh
+// bottom row. Generic over byte-stride (char grid = cols*5, attr = cols).
+func _scrollUp(g, stride, gtotal, fillRow) {
+    emit substring(g, stride, gtotal) + fillRow
+}
+
+// _applySgr(pen, params) — fold an SGR list (e.g. "1;31;44") into the colour
+// pen, packed fg*256+bg (sentinel 1 = default each). fg 30-37/39/90-97,
+// bg 40-47/49/100-107; ignores bold/256-colour. Returns the new packed pen.
 func _applySgr(pen, params) {
     let n = len(params)
-    if n == 0 { emit 257 }               // ESC[m == ESC[0m == reset (fg=1,bg=1)
+    if n == 0 { emit 257 }               // ESC[m == reset (fg=1,bg=1)
     let fg = pen / 256
     let bg = pen - fg * 256
     let i = 0
@@ -119,8 +136,7 @@ func _applySgr(pen, params) {
     emit fg * 256 + bg
 }
 
-// _sgrPair(fg, bg) — ANSI to set the host terminal to (fg,bg); 1 = default.
-// Reset-then-set so no stale attribute leaks between cells.
+// _sgrPair(fg, bg) — ANSI to set (fg,bg); 1 = default. Reset-then-set.
 func _sgrPair(fg, bg) {
     let e = fromCharCode(27)
     let s = e + "[0m"
@@ -129,15 +145,28 @@ func _sgrPair(fg, bg) {
     emit s
 }
 
+// _utf8Len(c) — byte length of a UTF-8 char from its lead byte `c` (1 if not a
+// valid lead / a stray continuation).
+func _utf8Len(c) {
+    if c >= 240 && c <= 247 { emit 4 }   // 0xF0-0xF7
+    if c >= 224 && c <= 239 { emit 3 }   // 0xE0-0xEF
+    if c >= 192 && c <= 223 { emit 2 }   // 0xC0-0xDF
+    emit 1
+}
+
 // renderGrid(s, cols, rows) — feed byte string s into a cols×rows grid, apply
-// cursor/erase/colour sequences, return the grid as text (rows joined by \n,
-// trailing spaces trimmed per row, foreground colour re-emitted as ANSI).
+// cursor/erase/colour/scroll, return the grid as text (rows joined by \n,
+// trailing blanks trimmed per row, fg+bg colour re-emitted as ANSI).
 func renderGrid(s, cols, rows) {
     let total = cols * rows
-    let grid = _blank(total)
-    let attr = _fill1(total)               // per-cell fg code (1 = default)
-    let battr = _fill1(total)              // per-cell bg code (1 = default)
-    let pen = 257                          // packed fg*256+bg, default 1*256+1
+    let grid = _blankRow(cols)           // built up to `rows` rows below
+    let rr = 1
+    while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
+    let gtotal = total * 5
+    let stride = cols * 5
+    let attr = _fill1(total)             // per-cell fg (1 = default)
+    let battr = _fill1(total)            // per-cell bg (1 = default)
+    let pen = 257                        // packed fg*256+bg
     let cr = 0
     let cc = 0
     let n = len(s)
@@ -168,11 +197,16 @@ func renderGrid(s, cols, rows) {
                         if fin == 68 { cc = _clamp(cc - p0, 0, cols - 1) }   // back
                         if fin == 109 { pen = _applySgr(pen, params) }       // 'm' SGR colour
                         if fin == 74 {                   // 'J' erase display (2/3 = all)
-                            if _leadInt(params, 0) >= 2 { grid = _blank(total)  attr = _fill1(total)  battr = _fill1(total)  cr = 0  cc = 0 }
+                            if _leadInt(params, 0) >= 2 {
+                                grid = _blankRow(cols)
+                                let q = 1
+                                while q < rows { grid = grid + _blankRow(cols)  q = q + 1 }
+                                attr = _fill1(total)  battr = _fill1(total)  cr = 0  cc = 0
+                            }
                         }
                         if fin == 75 {                   // 'K' erase whole line
                             let st = cr * cols
-                            grid = substring(grid, 0, st) + _blank(cols) + substring(grid, st + cols, total)
+                            grid = substring(grid, 0, st * 5) + _blankRow(cols) + substring(grid, st * 5 + stride, gtotal)
                             attr = substring(attr, 0, st) + _fill1(cols) + substring(attr, st + cols, total)
                             battr = substring(battr, 0, st) + _fill1(cols) + substring(battr, st + cols, total)
                         }
@@ -195,10 +229,10 @@ func renderGrid(s, cols, rows) {
                 }
             }
         } else {
-            if c == 10 {                                                         // LF → newline (col reset, matches brain)
+            if c == 10 {                                                         // LF → newline
                 cr = cr + 1  cc = 0
                 if cr >= rows {
-                    grid = _scrollUp(grid, cols, total, _blank(cols))
+                    grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
                     attr = _scrollUp(attr, cols, total, _fill1(cols))
                     battr = _scrollUp(battr, cols, total, _fill1(cols))
                     cr = rows - 1
@@ -206,33 +240,35 @@ func renderGrid(s, cols, rows) {
                 i = i + 1
             }
             else {
-                if c == 13 { cc = 0  i = i + 1 }                                     // CR
+                if c == 13 { cc = 0  i = i + 1 }                                 // CR
                 else {
-                    if c == 8 { if cc > 0 { cc = cc - 1 }  i = i + 1 }               // BS
+                    if c == 8 { if cc > 0 { cc = cc - 1 }  i = i + 1 }           // BS
                     else {
-                        if c == 9 {                                                  // TAB
+                        if c == 9 {                                              // TAB
                             cc = ((cc / 8) + 1) * 8
                             if cc >= cols { cc = cols - 1 }
                             i = i + 1
                         } else {
-                            if c >= 32 {                                             // printable
+                            if c >= 32 {                                         // printable (incl UTF-8)
+                                let clen = _utf8Len(c)
+                                if i + clen > n { clen = n - i }
                                 let idx = cr * cols + cc
                                 let pfg = pen / 256
-                                grid = _put(grid, idx, substring(s, i, i + 1))
-                                attr = _put(attr, idx, fromCharCode(pfg))
-                                battr = _put(battr, idx, fromCharCode(pen - pfg * 256))
+                                grid = _putCell(grid, idx, substring(s, i, i + clen))
+                                attr = _put1(attr, idx, fromCharCode(pfg))
+                                battr = _put1(battr, idx, fromCharCode(pen - pfg * 256))
                                 cc = cc + 1
                                 if cc >= cols {
                                     cc = 0  cr = cr + 1
                                     if cr >= rows {
-                                        grid = _scrollUp(grid, cols, total, _blank(cols))
+                                        grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
                                         attr = _scrollUp(attr, cols, total, _fill1(cols))
                                         battr = _scrollUp(battr, cols, total, _fill1(cols))
                                         cr = rows - 1
                                     }
                                 }
-                            }
-                            i = i + 1
+                                i = i + clen
+                            } else { i = i + 1 }                                 // other control byte
                         }
                     }
                 }
@@ -240,15 +276,20 @@ func renderGrid(s, cols, rows) {
         }
     }
 
-    // Render: each row trimmed of trailing spaces, joined by \n, foreground
-    // colour re-emitted as ANSI (reset at each row end if a colour was active).
+    // Render: per row, trim trailing blank cells, emit chars with colour.
     let out = sbNew()
     let r = 0
     while r < rows {
         let base = r * cols
-        let rowstr = substring(grid, base, base + cols)
-        let e = len(rowstr)
-        while e > 0 && charCode(substring(rowstr, e - 1, e)) == 32 { e = e - 1 }
+        // trim trailing blank (width-1 space) cells
+        let e = cols
+        let trimming = 1
+        while e > 0 && trimming == 1 {
+            let off = (base + e - 1) * 5
+            let w = charCode(substring(grid, off, off + 1))
+            if w == 1 && substring(grid, off + 1, off + 2) == " " { e = e - 1 }
+            else { trimming = 0 }
+        }
         let lastFg = 1
         let lastBg = 1
         let col = 0
@@ -260,7 +301,9 @@ func renderGrid(s, cols, rows) {
                 lastFg = cellFg
                 lastBg = cellBg
             }
-            out = sbAppend(out, substring(rowstr, col, col + 1))
+            let off = (base + col) * 5
+            let w = charCode(substring(grid, off, off + 1))
+            out = sbAppend(out, substring(grid, off + 1, off + 1 + w))
             col = col + 1
         }
         if lastFg != 1 || lastBg != 1 { out = sbAppend(out, fromCharCode(27) + "[0m") }
