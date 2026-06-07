@@ -58,7 +58,10 @@ func kryoterm_interactive(shellPath, cols, rows) {
     // (`zsh -f`) — a clean prompt, no .zshrc/powerlevel10k redraw storm. (The
     // ptyForkExec builtin can't pass argv flags, so we drive it via the shell.)
     let m = ptyOpen("/bin/sh")
-    let boot = "exec /bin/zsh -f" + nl
+    // `clear` wipes the echoed bootstrap line (ESC[2J, which the grid honours),
+    // then exec replaces sh with an rc-free zsh — so the window opens straight to
+    // a clean `%` prompt, no sh→zsh transition scrollback.
+    let boot = "clear; exec /bin/zsh -f" + nl
     fdWrite(m, boot, len(boot))            // BLOCKING write (before nonblock) so
                                            // the bootstrap line can't be dropped
     ptySetNonblock(m)
