@@ -6,9 +6,16 @@ C++, no Qt, no GTK, no libX11/libxcb. The window comes from
 (the Krypton X11 wire-protocol client) and the binary is a static,
 syscall-only ELF — just like every other Krypton program.
 
-**Status: phase 0 (stub).** Spawns a child process via `shellRun()` and
-echoes its output to stdout. No window yet, no PTY yet, no escape-code
-handling yet. Building blocks lock in over the next few phases.
+**Status: phase 3 — live PTY engine (macOS).** kryoterm spawns a real
+shell on a pseudo-terminal, runs commands, and renders the live output
+through a pure-Krypton grid driver. The engine is **native syscall
+builtins in the Krypton macho backend** — `ptyMaster`/`ptySlaveName`/
+`ptyForkExec`, `fdRead`/`fdWrite`/`fdClose`, `fdSetNonblock`, `sleepUs` —
+no C, no libc, just `svc` syscalls (open `/dev/ptmx`, grant/unlock,
+fork, setsid, TIOCSCTTY, dup2, execve with inherited env). Verified:
+`uname -srm` → `Darwin 25.5.0 arm64`, `pwd`, `echo` all execute and
+render. Remaining for a windowed terminal: the GUI surface (objc FFI),
+a UTF-8-aware grid, and a live keystroke loop.
 
 ## Why this exists
 
@@ -24,14 +31,13 @@ window" core, terk becomes optional rather than primary.
 
 ## Phases
 
-| Phase | What it does | Depends on |
+| Phase | What it does | Status |
 |---|---|---|
-| 0 (today) | Spawn child via `shellRun`, echo output | `exec`/`shellRun` (shipped) |
-| 1 | Open a window via `x11.k` Phase B, draw a placeholder | `stdlib/x11.k` Phase B (agent-l, in progress) |
-| 2 | Render child output as text in window | `stdlib/x11.k` Phase C: `ImageText8` (agent-l, planned) |
-| 3 | Real PTY via `forkpty` syscall | new builtin in `elf.k` (agent-l, future) |
-| 4 | ANSI escape-code handling, scrollback, themes | pure-Krypton stdlib (agent-w, future) |
-| 5 | Wayland transport via `stdlib/wayland.k` | `stdlib/wayland.k` (agent-l, future) |
+| 0 | Spawn child via `shellRun`, echo output | ✅ done |
+| 3 | **Real PTY** — spawn a shell, read/write, drive interactive programs | ✅ **done (macOS)** — native pty/fd builtins in `macho_arm64_self.k` |
+| 4 | ANSI escape-code handling + grid/cursor render | ✅ done (`ansi.k` + `term.k`; SGR/color + UTF-8 still TODO) |
+| 1/2 | GUI window + render text in it | ⛔ blocked on objc FFI (`objc_msgSend` codegen) — was X11-shaped; macOS needs Cocoa |
+| 5 | Live keystroke loop, scrollback, themes | next, after the GUI surface |
 
 ## Build
 
