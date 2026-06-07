@@ -36,6 +36,59 @@ static void glog(const char *fmt, ...) {
     fputc('\n', f); fflush(f);
 }
 
+// ---- theme / config -------------------------------------------------------
+// ~/.config/kryoterm/config sets the titlebar + text-area colours, with a
+// light-mode and a dark-mode value each (the window follows the system
+// appearance live). Auto-created with defaults on first run.
+static NSColor *gTbLight, *gTbDark, *gBgLight, *gBgDark, *gCurBg;
+static NSWindow *gWin;
+
+static NSColor *hexColor(const char *h, NSColor *fallback) {
+    while (*h == '#' || *h == ' ' || *h == '\t') h++;
+    unsigned int r = 0, g = 0, b = 0;
+    if (sscanf(h, "%2x%2x%2x", &r, &g, &b) != 3) return fallback;
+    return [NSColor colorWithCalibratedRed:r/255.0 green:g/255.0 blue:b/255.0 alpha:1];
+}
+
+static BOOL systemIsDark(void) {
+    NSString *s = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleInterfaceStyle"];
+    return s && [s caseInsensitiveCompare:@"Dark"] == NSOrderedSame;
+}
+
+static void loadConfig(void) {
+    gTbLight = hexColor("#2b2b2b", nil);  gTbDark = hexColor("#000000", nil);
+    gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
+    NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
+    NSString *path = [dir stringByAppendingPathComponent:@"config"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:path]) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *def =
+          @"# kryoterm config — colours as #RRGGBB.\n"
+           "# Titlebar and text area, with a light-mode and dark-mode value each;\n"
+           "# the window switches automatically with the system appearance.\n"
+           "titlebar_light   = #2b2b2b\n"
+           "titlebar_dark    = #000000\n"
+           "background_light = #2b2b2b\n"
+           "background_dark  = #000000\n";
+        [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+    NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+    for (NSString *raw in [txt componentsSeparatedByString:@"\n"]) {
+        NSString *line = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (line.length == 0 || [line hasPrefix:@"#"]) continue;
+        NSRange eq = [line rangeOfString:@"="];
+        if (eq.location == NSNotFound) continue;
+        NSString *k = [[line substringToIndex:eq.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSColor *c = hexColor([[line substringFromIndex:eq.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]].UTF8String, nil);
+        if (!c) continue;
+        if      ([k isEqualToString:@"titlebar_light"])   gTbLight = c;
+        else if ([k isEqualToString:@"titlebar_dark"])    gTbDark  = c;
+        else if ([k isEqualToString:@"background_light"]) gBgLight = c;
+        else if ([k isEqualToString:@"background_dark"])  gBgDark  = c;
+    }
+}
+
 // xterm256(n) — the xterm 256-colour palette index -> NSColor. term.k re-emits
 // every colour as 38;5;N / 48;5;N, mapping basic codes to indices 0-15.
 static NSColor *xterm256(int n) {
@@ -120,7 +173,7 @@ static NSAttributedString *parseFrame(NSData *data) {
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)isFlipped { return YES; }              // text origin at top-left
 - (void)drawRect:(NSRect)dirty {
-    [[NSColor colorWithCalibratedRed:0.07 green:0.07 blue:0.08 alpha:1] set];
+    [(gCurBg ?: [NSColor blackColor]) set];
     NSRectFill(self.bounds);
     if (self.attr) [self.attr drawAtPoint:NSMakePoint(6, 4)];
 }
@@ -151,6 +204,14 @@ static NSAttributedString *parseFrame(NSData *data) {
 @end
 
 static KryptonView *gView;
+
+// Pick titlebar + text-area colours for the current system appearance and apply.
+static void applyColors(void) {
+    BOOL dark = systemIsDark();
+    gCurBg = dark ? gBgDark : gBgLight;
+    if (gWin) gWin.backgroundColor = (dark ? gTbDark : gTbLight);
+    if (gView) [gView setNeedsDisplay:YES];
+}
 
 @interface Reader : NSObject
 @end
@@ -211,6 +272,7 @@ int main(int argc, const char *argv[]) {
 
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        loadConfig();
 
         NSRect frame = NSMakeRect(0, 0, 830, 500);   // ~104x30 at Menlo 13
         NSWindow *win = [[NSWindow alloc]
@@ -218,6 +280,17 @@ int main(int argc, const char *argv[]) {
                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
                         backing:NSBackingStoreBuffered defer:NO];
         [win setTitle:@"kryoterm — pure-Krypton terminal"];
+        gWin = win;
+        // Dark-styled titlebar (light text, correct traffic lights) tinted by our
+        // configured colour; the title bar takes the window background colour.
+        win.titlebarAppearsTransparent = YES;
+        win.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        applyColors();
+        // Live-update when the user toggles light/dark mode.
+        [[NSDistributedNotificationCenter defaultCenter]
+            addObserverForName:@"AppleInterfaceThemeChangedNotification" object:nil
+                         queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *_n){ applyColors(); }];
 
         gView = [[KryptonView alloc] initWithFrame:frame];
         [gView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
