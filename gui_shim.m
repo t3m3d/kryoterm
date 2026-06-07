@@ -26,6 +26,7 @@ static int   gMaster = -1;   // pipe to kryoterm's stdin  (write keystrokes)
 static int   gReadFd = -1;   // pipe from kryoterm's stdout (read frames)
 static pid_t gChild  = -1;
 static int   gCurRow = 0, gCurCol = 0;   // cursor cell (from each frame's header)
+static BOOL  gCursorOn = YES;            // blink phase
 static NSFont *gFont;
 static CGFloat gCharW = 7.8, gLineH = 15.5;
 static const CGFloat kPadX = 6, kPadY = 4;   // text origin inside the view
@@ -176,8 +177,8 @@ static NSAttributedString *parseFrame(NSData *data) {
     [(gCurBg ?: [NSColor blackColor]) set];
     NSRectFill(self.bounds);
     if (self.attr) [self.attr drawAtPoint:NSMakePoint(kPadX, kPadY)];
-    // thin vertical-bar cursor at the shell's cursor cell (only when focused)
-    if (self.window.isKeyWindow) {
+    // thin vertical-bar cursor at the shell's cursor cell (focused + blink-on)
+    if (self.window.isKeyWindow && gCursorOn) {
         [[NSColor colorWithCalibratedRed:0.85 green:0.87 blue:0.83 alpha:0.95] set];
         NSRectFill(NSMakeRect(kPadX + gCurCol * gCharW, kPadY + gCurRow * gLineH, 2.0, gLineH));
     }
@@ -253,6 +254,7 @@ static void applyColors(void) {
                         }
                     }
                     gView.attr = parseFrame(body);
+                    gCursorOn = YES;            // solid right after output/typing
                     [gView setNeedsDisplay:YES];
                 });
                 [frame setLength:0];
@@ -341,6 +343,12 @@ int main(int argc, const char *argv[]) {
             glog("post-runloop: isKey=%d frIsView=%d", (int)[win isKeyWindow],
                  (int)([win firstResponder] == gView));
         });
+
+        // Cursor blink (~530ms, classic terminal cadence).
+        [NSTimer scheduledTimerWithTimeInterval:0.53 repeats:YES block:^(NSTimer *_t){
+            gCursorOn = !gCursorOn;
+            [gView setNeedsDisplay:YES];
+        }];
 
         Reader *r = [[Reader alloc] init];
         [NSThread detachNewThreadSelector:@selector(readLoop) toTarget:r withObject:nil];
