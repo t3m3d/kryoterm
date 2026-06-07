@@ -229,19 +229,32 @@ func gridFeed(state, s, cols, rows) {
                         if fin == 109 { pen = _applySgr(pen, params) }       // 'm' SGR colour
                         if fin == 115 { scr = cr  scc = cc  spen = pen }     // 's' save cursor
                         if fin == 117 { cr = scr  cc = scc  pen = spen }     // 'u' restore cursor
-                        if fin == 74 {                   // 'J' erase display (2/3 = all)
-                            if _leadInt(params, 0) >= 2 {
-                                grid = _blankRow(cols)
-                                let q = 1
-                                while q < rows { grid = grid + _blankRow(cols)  q = q + 1 }
-                                attr = _fill1(total)  battr = _fill1(total)  cr = 0  cc = 0
-                            }
+                        if fin == 74 {                   // 'J' erase in display (honour param)
+                            let pj = _leadInt(params, 0)
+                            let ja = 0
+                            let jb = total
+                            if pj == 0 { ja = cr * cols + cc }       // cursor → end of screen
+                            if pj == 1 { jb = cr * cols + cc + 1 }    // start → cursor
+                            // pj >= 2: whole screen
+                            let jcnt = jb - ja
+                            grid = substring(grid, 0, ja * 5) + _blankRow(jcnt) + substring(grid, ja * 5 + jcnt * 5, gtotal)
+                            attr = substring(attr, 0, ja) + _fill1(jcnt) + substring(attr, ja + jcnt, total)
+                            battr = substring(battr, 0, ja) + _fill1(jcnt) + substring(battr, ja + jcnt, total)
+                            if pj >= 2 { cr = 0  cc = 0 }            // clear-all homes (matches kryofetch)
                         }
-                        if fin == 75 {                   // 'K' erase whole line
-                            let st = cr * cols
-                            grid = substring(grid, 0, st * 5) + _blankRow(cols) + substring(grid, st * 5 + stride, gtotal)
-                            attr = substring(attr, 0, st) + _fill1(cols) + substring(attr, st + cols, total)
-                            battr = substring(battr, 0, st) + _fill1(cols) + substring(battr, st + cols, total)
+                        if fin == 75 {                   // 'K' erase in line (honour param)
+                            let pk = _leadInt(params, 0)
+                            let a = 0
+                            let b = cols
+                            if pk == 0 { a = cc }                    // cursor → end
+                            if pk == 1 { b = cc + 1 }                // start → cursor
+                            // pk == 2 (or other): whole line (a=0, b=cols)
+                            let cnt = b - a
+                            let o5 = (cr * cols + a) * 5
+                            grid = substring(grid, 0, o5) + _blankRow(cnt) + substring(grid, o5 + cnt * 5, gtotal)
+                            let o1 = cr * cols + a
+                            attr = substring(attr, 0, o1) + _fill1(cnt) + substring(attr, o1 + cnt, total)
+                            battr = substring(battr, 0, o1) + _fill1(cnt) + substring(battr, o1 + cnt, total)
                         }
                         i = j + 1
                     }
