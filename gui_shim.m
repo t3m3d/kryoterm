@@ -22,7 +22,8 @@
 #import <signal.h>
 #import <stdarg.h>
 
-static int   gMaster = -1;   // pty master to the kryoterm -i process
+static int   gMaster = -1;   // pipe to kryoterm's stdin  (write keystrokes)
+static int   gReadFd = -1;   // pipe from kryoterm's stdout (read frames)
 static pid_t gChild  = -1;
 
 // Debug log (an agent can't see the window; this is how we diagnose). Tail it:
@@ -134,7 +135,7 @@ static KryptonView *gView;
     unsigned char buf[8192];
     ssize_t got;
     int nframes = 0;
-    while ((got = read(gMaster, buf, sizeof(buf))) > 0) {
+    while ((got = read(gReadFd, buf, sizeof(buf))) > 0) {
         for (ssize_t i = 0; i < got; i++) {
             if (buf[i] == 0x0c) {                       // form feed -> frame boundary
                 NSData *snapshot = [frame copy];
@@ -159,16 +160,27 @@ int main(int argc, const char *argv[]) {
     @autoreleasepool {
         const char *kpath = (argc > 1) ? argv[1] : "./kryoterm";
 
-        // spawn `kryoterm -i` on a pty (raw, so keys pass through unprocessed)
-        struct termios tio; memset(&tio, 0, sizeof(tio));
-        cfmakeraw(&tio);
-        tio.c_cc[VMIN] = 1; tio.c_cc[VTIME] = 0;
-        gChild = forkpty(&gMaster, NULL, &tio, NULL);
-        if (gChild < 0) { perror("forkpty"); return 1; }
+        // Spawn `kryoterm -i` over TWO pipes (not one shared pty): keys go down
+        // inpipe to its stdin, frames come up outpipe from its stdout. Separate
+        // open-file-descriptions = independent O_NONBLOCK — kryoterm can make its
+        // stdin non-blocking without that flag bleeding onto stdout (which would
+        // cause partial/EAGAIN writes that truncate frames). The shell still gets
+        // a real pty from kryoterm itself; these are just byte conduits.
+        int inpipe[2], outpipe[2];
+        if (pipe(inpipe) || pipe(outpipe)) { perror("pipe"); return 1; }
+        gChild = fork();
+        if (gChild < 0) { perror("fork"); return 1; }
         if (gChild == 0) {
+            dup2(inpipe[0], 0);
+            dup2(outpipe[1], 1);
+            dup2(outpipe[1], 2);
+            close(inpipe[0]); close(inpipe[1]); close(outpipe[0]); close(outpipe[1]);
             execl(kpath, kpath, "-i", (char *)NULL);
             _exit(127);
         }
+        close(inpipe[0]); close(outpipe[1]);
+        gMaster = inpipe[1];        // write keystrokes here -> kryoterm stdin
+        gReadFd = outpipe[0];       // read frames here <- kryoterm stdout
 
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];

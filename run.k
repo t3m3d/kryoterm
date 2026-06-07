@@ -95,10 +95,24 @@ func kryoterm_interactive(shellPath, cols, rows) {
             quiet = 0
         } else {
             quiet = quiet + 1
+            if len(pending) > 0 {           // output stopped with a buffered tail —
+                st = gridFeed(st, pending, cols, rows)   // no more reads will complete
+                pending = ""                             // it, so render it as-is
+                dirty = 1
+            }
         }
         if dirty == 1 && quiet >= 2 {       // output settled -> one coalesced frame
             let frame = gridRender(st, cols, rows) + ff
-            fdWrite(1, frame, len(frame))
+            // write() to a pty can be PARTIAL (small kernel buffer); loop or the
+            // frame (and its terminating \f) gets truncated and the shim never
+            // sees a complete frame.
+            let flen = len(frame)
+            let off = 0
+            while off < flen {
+                let w = fdWrite(1, substring(frame, off, flen), flen - off)
+                if w <= 0 { off = flen }    // error -> bail (don't spin forever)
+                else { off = off + w }
+            }
             dirty = 0
         }
         sleepUs(0, 8000)                   // ~8ms poll
