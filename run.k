@@ -53,17 +53,27 @@ func kryoterm_loop(cmd) {
 // "clear and redraw" marker). Runs until the process is killed (window close) —
 // macho has no waitpid builtin to detect shell exit. cols×rows fixed at 80×24.
 func kryoterm_interactive(shellPath, cols, rows) {
-    let m = ptyOpen(shellPath)
+    let nl = fromCharCode(10)
+    // Spawn a plain /bin/sh, then have it replace itself with an rc-free zsh
+    // (`zsh -f`) — a clean prompt, no .zshrc/powerlevel10k redraw storm. (The
+    // ptyForkExec builtin can't pass argv flags, so we drive it via the shell.)
+    let m = ptyOpen("/bin/sh")
+    let boot = "exec /bin/zsh -f" + nl
+    fdWrite(m, boot, len(boot))            // BLOCKING write (before nonblock) so
+                                           // the bootstrap line can't be dropped
     ptySetNonblock(m)
     fdSetNonblock(0)                       // stdin (keys from the window)
     let st = gridNew(cols, rows)
     let ff = fromCharCode(12)              // frame TERMINATOR (suffix): the shim
-                                           // renders the bytes preceding each \f,
-                                           // so \f must END a frame (not start it)
-                                           // or the display lags one frame behind.
-    // NOTE: a loop-invariant `while go == 1` MISCOMPILES on the macho backend
-    // (the loop body never runs). Use a large bounded counter that changes each
-    // iteration (2e9 * 8ms ≈ months — effectively unbounded for a session).
+                                           // renders bytes preceding each \f.
+    // Frame coalescing: feed all available output into the grid, but only emit a
+    // frame once output has SETTLED (no new bytes for a couple of poll cycles).
+    // A burst (e.g. a prompt redraw) becomes ONE redraw instead of many = no
+    // flicker. `dirty` = grid changed since last frame; `quiet` = idle cycles.
+    // NOTE: a loop-invariant `while go == 1` MISCOMPILES on macho — use a large
+    // bounded counter (2e9 * 8ms ≈ months ≈ unbounded for a session).
+    let dirty = 0
+    let quiet = 0
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
@@ -71,8 +81,15 @@ func kryoterm_interactive(shellPath, cols, rows) {
         let out = fdRead(m, 65536)
         if len(out) > 0 {
             st = gridFeed(st, out, cols, rows)
+            dirty = 1
+            quiet = 0
+        } else {
+            quiet = quiet + 1
+        }
+        if dirty == 1 && quiet >= 2 {       // output settled -> one coalesced frame
             let frame = gridRender(st, cols, rows) + ff
             fdWrite(1, frame, len(frame))
+            dirty = 0
         }
         sleepUs(0, 8000)                   // ~8ms poll
         i = i + 1
