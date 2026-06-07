@@ -57,7 +57,10 @@ func kryoterm_interactive(shellPath, cols, rows) {
     ptySetNonblock(m)
     fdSetNonblock(0)                       // stdin (keys from the window)
     let st = gridNew(cols, rows)
-    let ff = fromCharCode(12)              // frame marker: shim clears + redraws
+    let ff = fromCharCode(12)              // frame TERMINATOR (suffix): the shim
+                                           // renders the bytes preceding each \f,
+                                           // so \f must END a frame (not start it)
+                                           // or the display lags one frame behind.
     // NOTE: a loop-invariant `while go == 1` MISCOMPILES on the macho backend
     // (the loop body never runs). Use a large bounded counter that changes each
     // iteration (2e9 * 8ms ≈ months — effectively unbounded for a session).
@@ -68,7 +71,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
         let out = fdRead(m, 65536)
         if len(out) > 0 {
             st = gridFeed(st, out, cols, rows)
-            let frame = ff + gridRender(st, cols, rows)
+            let frame = gridRender(st, cols, rows) + ff
             fdWrite(1, frame, len(frame))
         }
         sleepUs(0, 8000)                   // ~8ms poll
