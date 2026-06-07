@@ -20,9 +20,20 @@
 #import <termios.h>
 #import <unistd.h>
 #import <signal.h>
+#import <stdarg.h>
 
 static int   gMaster = -1;   // pty master to the kryoterm -i process
 static pid_t gChild  = -1;
+
+// Debug log (an agent can't see the window; this is how we diagnose). Tail it:
+//   tail -f /tmp/kryoterm-gui.log
+static void glog(const char *fmt, ...) {
+    static FILE *f = NULL;
+    if (!f) f = fopen("/tmp/kryoterm-gui.log", "w");
+    if (!f) return;
+    va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
+    fputc('\n', f); fflush(f);
+}
 
 // SGR foreground code (30-37 / 90-97 / 39) -> NSColor.
 static NSColor *fgColor(int code) {
@@ -101,9 +112,12 @@ static NSAttributedString *parseFrame(NSData *data) {
 }
 - (void)keyDown:(NSEvent *)e {
     NSString *chars = e.characters;
+    glog("keyDown: len=%lu first=%d master=%d", (unsigned long)chars.length,
+         chars.length ? [chars characterAtIndex:0] : -1, gMaster);
     if (chars.length && gMaster >= 0) {
         const char *bytes = [chars UTF8String];
-        write(gMaster, bytes, strlen(bytes));
+        ssize_t w = write(gMaster, bytes, strlen(bytes));
+        glog("  wrote %ld bytes to pty", (long)w);
     }
 }
 @end
@@ -119,10 +133,13 @@ static KryptonView *gView;
     NSMutableData *frame = [NSMutableData data];
     unsigned char buf[8192];
     ssize_t got;
+    int nframes = 0;
     while ((got = read(gMaster, buf, sizeof(buf))) > 0) {
         for (ssize_t i = 0; i < got; i++) {
             if (buf[i] == 0x0c) {                       // form feed -> frame boundary
                 NSData *snapshot = [frame copy];
+                nframes++;
+                glog("frame #%d (%lu bytes)", nframes, (unsigned long)snapshot.length);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     gView.attr = parseFrame(snapshot);
                     [gView setNeedsDisplay:YES];
@@ -166,10 +183,23 @@ int main(int argc, const char *argv[]) {
         gView = [[KryptonView alloc] initWithFrame:frame];
         [gView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [win setContentView:gView];
-        [win makeFirstResponder:gView];
+        [win setInitialFirstResponder:gView];
         [win center];
         [win makeKeyAndOrderFront:nil];
+        [win orderFrontRegardless];
         [NSApp activateIgnoringOtherApps:YES];
+        glog("started: gMaster=%d child=%d isKey=%d frIsView=%d", gMaster, gChild,
+             (int)[win isKeyWindow], (int)([win firstResponder] == gView));
+
+        // Re-assert activation + key window AFTER the run loop is up — a bundle-
+        // less CLI binary often can't take key focus until then.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp activateIgnoringOtherApps:YES];
+            [win makeKeyAndOrderFront:nil];
+            [win makeFirstResponder:gView];
+            glog("post-runloop: isKey=%d frIsView=%d", (int)[win isKeyWindow],
+                 (int)([win firstResponder] == gView));
+        });
 
         Reader *r = [[Reader alloc] init];
         [NSThread detachNewThreadSelector:@selector(readLoop) toTarget:r withObject:nil];
