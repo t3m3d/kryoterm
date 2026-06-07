@@ -59,47 +59,62 @@ static NSColor *fgColor(int code) {
     }
 }
 
+// bgColor(code) — SGR background code (40-47 / 100-107) -> NSColor (nil = default).
+static NSColor *bgColor(int code) {
+    if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) return fgColor(code - 10);
+    return nil;
+}
+
+// append a run with fg + (optional) bg color.
+static void appendRun(NSMutableAttributedString *out, const unsigned char *b,
+                      NSUInteger start, NSUInteger len, int fg, int bg, NSFont *font) {
+    if (len == 0) return;
+    NSString *s = [[NSString alloc] initWithBytes:b+start length:len encoding:NSUTF8StringEncoding];
+    if (!s) return;
+    NSMutableDictionary *attrs = [@{ NSForegroundColorAttributeName: fgColor(fg),
+                                     NSFontAttributeName: font } mutableCopy];
+    NSColor *bc = bgColor(bg);
+    if (bc) attrs[NSBackgroundColorAttributeName] = bc;
+    [out appendAttributedString:[[NSAttributedString alloc] initWithString:s attributes:attrs]];
+}
+
 // Parse one frame's text (plain text + SGR escapes) into a coloured attributed
 // string. term.k already resolved cursor/erase, so only `ESC[..m` appears.
 static NSAttributedString *parseFrame(NSData *data) {
     // A Nerd Font so powerline/git/powerlevel10k icon glyphs (private-use
     // codepoints) render instead of missing-glyph boxes. Falls back to Menlo.
     NSFont *font = [NSFont fontWithName:@"JetBrainsMono Nerd Font Mono" size:13]
-                ?: [NSFont fontWithName:@"JetBrainsMonoNF-Regular" size:13]
                 ?: [NSFont fontWithName:@"Menlo" size:13]
                 ?: [NSFont userFixedPitchFontOfSize:13];
     NSMutableAttributedString *out = [[NSMutableAttributedString alloc] init];
     const unsigned char *b = data.bytes;
     NSUInteger n = data.length, i = 0, runStart = 0;
-    int curFg = 39;
+    int curFg = 39, curBg = 49;
     while (i < n) {
         if (b[i] == 0x1b && i + 1 < n && b[i+1] == '[') {
-            if (i > runStart) {
-                NSString *s = [[NSString alloc] initWithBytes:b+runStart length:i-runStart encoding:NSUTF8StringEncoding];
-                if (s) [out appendAttributedString:[[NSAttributedString alloc] initWithString:s
-                          attributes:@{NSForegroundColorAttributeName:fgColor(curFg), NSFontAttributeName:font}]];
-            }
-            NSUInteger j = i + 2; int code = 0, have = 0, newFg = curFg;
+            appendRun(out, b, runStart, i - runStart, curFg, curBg, font);
+            NSUInteger j = i + 2; int code = 0, have = 0, newFg = curFg, newBg = curBg;
             while (j < n) {
                 unsigned char p = b[j];
                 if (p >= '0' && p <= '9') { code = code*10 + (p - '0'); have = 1; }
                 else if (p == ';' || (p >= 0x40 && p <= 0x7e)) {
                     if (have || p == 'm') {
-                        if (code == 0 || code == 39) newFg = 39;
+                        if (code == 0) { newFg = 39; newBg = 49; }
+                        else if (code == 39) newFg = 39;
                         else if ((code>=30&&code<=37) || (code>=90&&code<=97)) newFg = code;
+                        else if (code == 49) newBg = 49;
+                        else if ((code>=40&&code<=47) || (code>=100&&code<=107)) newBg = code;
                     }
                     code = 0; have = 0;
-                    if (p >= 0x40 && p <= 0x7e) { if (p == 'm') curFg = newFg; j++; break; }
+                    if (p >= 0x40 && p <= 0x7e) { if (p == 'm') { curFg = newFg; curBg = newBg; } j++; break; }
                 }
                 j++;
             }
             i = j; runStart = i;
         } else i++;
     }
-    if (i > runStart) {
-        NSString *s = [[NSString alloc] initWithBytes:b+runStart length:i-runStart encoding:NSUTF8StringEncoding];
-        if (s) [out appendAttributedString:[[NSAttributedString alloc] initWithString:s
-                  attributes:@{NSForegroundColorAttributeName:fgColor(curFg), NSFontAttributeName:font}]];
+    if (1) {
+        appendRun(out, b, runStart, i - runStart, curFg, curBg, font);
     }
     return out;
 }
@@ -117,13 +132,27 @@ static NSAttributedString *parseFrame(NSData *data) {
     if (self.attr) [self.attr drawAtPoint:NSMakePoint(6, 4)];
 }
 - (void)keyDown:(NSEvent *)e {
+    if (gMaster < 0) return;
+    // Special keys -> ANSI/VT sequences (arrows for history/completion, etc.).
+    // NSEvent.characters returns private-use function-key codepoints for these,
+    // which the shell can't use, so map by keyCode instead.
+    const char *seq = NULL;
+    switch (e.keyCode) {
+        case 126: seq = "\x1b[A"; break;   // up    -> history prev
+        case 125: seq = "\x1b[B"; break;   // down  -> history next
+        case 124: seq = "\x1b[C"; break;   // right -> forward / accept autosuggest
+        case 123: seq = "\x1b[D"; break;   // left
+        case 115: seq = "\x1b[H"; break;   // home
+        case 119: seq = "\x1b[F"; break;   // end
+        case 116: seq = "\x1b[5~"; break;  // page up
+        case 121: seq = "\x1b[6~"; break;  // page down
+        case 117: seq = "\x1b[3~"; break;  // forward delete
+    }
+    if (seq) { write(gMaster, seq, strlen(seq)); return; }
     NSString *chars = e.characters;
-    glog("keyDown: len=%lu first=%d master=%d", (unsigned long)chars.length,
-         chars.length ? [chars characterAtIndex:0] : -1, gMaster);
-    if (chars.length && gMaster >= 0) {
+    if (chars.length) {
         const char *bytes = [chars UTF8String];
-        ssize_t w = write(gMaster, bytes, strlen(bytes));
-        glog("  wrote %ld bytes to pty", (long)w);
+        write(gMaster, bytes, strlen(bytes));
     }
 }
 @end
