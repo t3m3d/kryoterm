@@ -192,7 +192,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257"
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0"
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -212,6 +212,7 @@ func gridFeed(state, s, cols, rows) {
     let scr = _cf(tail, 3)               // saved cursor row (ESC7/ESC8)
     let scc = _cf(tail, 4)               // saved cursor col
     let spen = _cf(tail, 5)              // saved colour pen
+    let pw = _cf(tail, 6)                // pending wrap (deferred auto-margin)
     let n = len(s)
     let i = 0
 
@@ -230,6 +231,7 @@ func gridFeed(state, s, cols, rows) {
                         let fin = charCode(substring(s, j, j + 1))
                         let params = substring(s, i + 2, j)
                         let p0 = _leadInt(params, 1)
+                        if fin >= 65 && fin <= 72 { pw = 0 }    // any cursor move/CUP clears pending wrap
                         if fin == 72 || fin == 102 {     // 'H'/'f' CUP row;col (1-based)
                             cr = _clamp(p0 - 1, 0, rows - 1)
                             cc = _clamp(_leadInt(_afterSemi(params), 1) - 1, 0, cols - 1)
@@ -292,7 +294,7 @@ func gridFeed(state, s, cols, rows) {
             }
         } else {
             if c == 10 {                                                         // LF → newline
-                cr = cr + 1  cc = 0
+                cr = cr + 1  cc = 0  pw = 0
                 if cr >= rows {
                     grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
                     attr = _scrollUp(attr, cols, total, _fill1(cols))
@@ -302,9 +304,9 @@ func gridFeed(state, s, cols, rows) {
                 i = i + 1
             }
             else {
-                if c == 13 { cc = 0  i = i + 1 }                                 // CR
+                if c == 13 { cc = 0  pw = 0  i = i + 1 }                         // CR
                 else {
-                    if c == 8 { if cc > 0 { cc = cc - 1 }  i = i + 1 }           // BS
+                    if c == 8 { if cc > 0 { cc = cc - 1 }  pw = 0  i = i + 1 }   // BS
                     else {
                         if c == 9 {                                              // TAB
                             cc = ((cc / 8) + 1) * 8
@@ -314,14 +316,8 @@ func gridFeed(state, s, cols, rows) {
                             if c >= 32 {                                         // printable (incl UTF-8)
                                 let clen = _utf8Len(c)
                                 if i + clen > n { clen = n - i }
-                                let idx = cr * cols + cc
-                                let pfg = pen / 256
-                                grid = _putCell(grid, idx, substring(s, i, i + clen))
-                                attr = _put1(attr, idx, fromCharCode(pfg))
-                                battr = _put1(battr, idx, fromCharCode(pen - pfg * 256))
-                                cc = cc + 1
-                                if cc >= cols {
-                                    cc = 0  cr = cr + 1
+                                if pw == 1 {                                     // deferred wrap from last col
+                                    cc = 0  cr = cr + 1  pw = 0
                                     if cr >= rows {
                                         grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
                                         attr = _scrollUp(attr, cols, total, _fill1(cols))
@@ -329,6 +325,13 @@ func gridFeed(state, s, cols, rows) {
                                         cr = rows - 1
                                     }
                                 }
+                                let idx = cr * cols + cc
+                                let pfg = pen / 256
+                                grid = _putCell(grid, idx, substring(s, i, i + clen))
+                                attr = _put1(attr, idx, fromCharCode(pfg))
+                                battr = _put1(battr, idx, fromCharCode(pen - pfg * 256))
+                                if cc >= cols - 1 { pw = 1 }                     // at last column -> defer wrap
+                                else { cc = cc + 1 }
                                 i = i + clen
                             } else { i = i + 1 }                                 // other control byte
                         }
@@ -338,7 +341,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw
 }
 
 // gridRender(state, cols, rows) — render the packed state to text (rows joined
