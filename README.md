@@ -35,7 +35,7 @@ window" core, terk becomes optional rather than primary.
 |---|---|---|
 | 0 | Spawn child via `shellRun`, echo output | ✅ done |
 | 3 | **Real PTY** — spawn a shell, read/write, drive interactive programs | ✅ **done (macOS)** — native pty/fd builtins in `macho_arm64_self.k` |
-| 4 | ANSI escape-code handling + grid/cursor render + SGR colour | ✅ done (`ansi.k` + `term.k`; fg+bg colour re-emitted; UTF-8 multi-byte cells still TODO) |
+| 4 | ANSI handling + grid/cursor + SGR colour + UTF-8 + scroll | ✅ done (`ansi.k` + `term.k`: fg+bg colour, multi-byte UTF-8 cells, scroll-on-overflow) |
 | 1/2 | GUI window + render text in it | ⛔ blocked on objc FFI (`objc_msgSend` codegen) — was X11-shaped; macOS needs Cocoa |
 | 5 | Live keystroke loop, scrollback, themes | next, after the GUI surface |
 
