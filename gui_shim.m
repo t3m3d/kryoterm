@@ -33,6 +33,7 @@ static int   gMatchRow = -1, gMatchCol = 0, gMatchLen = 0;   // find highlight (
 static int   gMatchNum = 0, gMatchTotal = 0;                 // "N of M" matches
 static NSTextField *gSearchField;        // ⌘F search bar
 static NSTextField *gSearchCount;        // "N/M" match counter
+static NSString *gExecPath, *gKPath;     // for ⌘N (re-launch self)
 static int   gSelAR = 0, gSelAC = 0, gSelER = 0, gSelEC = 0;   // selection anchor/end
 static BOOL  gHasSel = NO;
 static NSFont *gFont;
@@ -275,6 +276,13 @@ static void sendResize(NSView *v) {
     if (gMaster >= 0) write(gMaster, "\036X,0\036", 5);
     [self.window makeFirstResponder:self];
 }
+- (void)newWindow {                                    // ⌘N — independent kryoterm
+    if (!gExecPath) return;
+    NSTask *t = [[NSTask alloc] init];
+    t.executableURL = [NSURL fileURLWithPath:gExecPath];
+    t.arguments = gKPath ? @[gKPath] : @[];
+    [t launchAndReturnError:nil];
+}
 - (void)controlTextDidChange:(NSNotification *)n {
     [self sendFind:@"F" query:gSearchField.stringValue];   // live search, resets to newest match
 }
@@ -429,6 +437,7 @@ static void sendResize(NSView *v) {
         if ([ch isEqualToString:@"v"]) { [self pasteClipboard]; return; }
         if ([ch isEqualToString:@"k"]) { write(gMaster, "\036C,0\036", 5); return; }  // clear
         if ([ch isEqualToString:@"f"]) { [self openSearch]; return; }                  // find
+        if ([ch isEqualToString:@"n"]) { [self newWindow]; return; }                   // new window
         if ([ch isEqualToString:@"g"]) { write(gMaster, "\036N,\036", 4); return; }    // ⌘G  next match
         if ([ch isEqualToString:@"G"]) { write(gMaster, "\036P,\036", 4); return; }    // ⌘⇧G prev match
         if ([ch isEqualToString:@"="] || [ch isEqualToString:@"+"]) {                  // zoom in
@@ -569,6 +578,14 @@ int main(int argc, const char *argv[]) {
         setenv("TERM_PROGRAM", "kryoterm", 1);
         setenv("TERM_PROGRAM_VERSION", "1.0", 1);
         setenv("TERM", "xterm-256color", 1);
+
+        // Absolute paths so ⌘N can re-launch another window.
+        NSString *(^abspath)(const char *) = ^NSString *(const char *p) {
+            NSString *s = [NSString stringWithUTF8String:p];
+            return [s hasPrefix:@"/"] ? s : [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:s];
+        };
+        gExecPath = abspath(argv[0]);
+        gKPath = abspath(kpath);
 
         // Spawn `kryoterm -i` over TWO pipes (not one shared pty): keys go down
         // inpipe to its stdin, frames come up outpipe from its stdout. Separate
