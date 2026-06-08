@@ -38,6 +38,7 @@ static CGFloat gLineSpacing = 0;
 static int gBellMode = 1;
 static NSString *gExecPath, *gKPath;
 static NSMutableArray *gPanes;     // all live KryptonView panes (blink + cleanup)
+static NSString *gAppName = @"kryoterm";   // from CFBundleName; drives title/menu/help (kryoterm, kcode, …)
 
 static void glog(const char *fmt, ...) {
     static FILE *f = NULL;
@@ -620,7 +621,7 @@ static NSWindow *makeWindow(void) {
     NSWindow *win = [[NSWindow alloc] initWithContentRect:frame
         styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable)
         backing:NSBackingStoreBuffered defer:NO];
-    [win setTitle:@"kryoterm"];
+    [win setTitle:gAppName];
     [win setContentMinSize:NSMakeSize(240, 140)];
     win.tabbingMode = NSWindowTabbingModeAutomatic;
     win.tabbingIdentifier = @"kryoterm";
@@ -789,8 +790,8 @@ static WTComposer *gWT;
 - (void)zoomIn:(id)s     { gFontSize += 1; applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
 - (void)zoomOut:(id)s    { if (gFontSize > 7) gFontSize -= 1; applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
 - (void)zoomActual:(id)s { loadConfig(); applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
-- (void)openHelpPage:(id)s { [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://krypton-lang.org/kryoterm.html"]]; }
-- (void)openGitHub:(id)s   { [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/t3m3d/kryoterm"]]; }
+- (void)openHelpPage:(id)s { [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:[NSString stringWithFormat:@"https://krypton-lang.org/%@.html", gAppName.lowercaseString]]]; }
+- (void)openGitHub:(id)s   { [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:[NSString stringWithFormat:@"https://github.com/t3m3d/%@", gAppName.lowercaseString]]]; }
 @end
 
 static Controller *gController;
@@ -800,9 +801,9 @@ static void buildMenu(void) {
     // App menu
     NSMenuItem *appItem = [[NSMenuItem alloc] init]; [mainMenu addItem:appItem];
     NSMenu *appMenu = [[NSMenu alloc] init];
-    [appMenu addItemWithTitle:@"About kryoterm" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+    [appMenu addItemWithTitle:[@"About " stringByAppendingString:gAppName] action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:@"Quit kryoterm" action:@selector(terminate:) keyEquivalent:@"q"];
+    [appMenu addItemWithTitle:[@"Quit " stringByAppendingString:gAppName] action:@selector(terminate:) keyEquivalent:@"q"];
     [appItem setSubmenu:appMenu];
     // File menu
     NSMenuItem *fileItem = [[NSMenuItem alloc] init]; [mainMenu addItem:fileItem];
@@ -890,7 +891,7 @@ static void buildMenu(void) {
     // Help menu (macOS prepends a search field automatically).
     NSMenuItem *helpItem = [[NSMenuItem alloc] init]; [mainMenu addItem:helpItem];
     NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
-    mi=[helpMenu addItemWithTitle:@"kryoterm Help" action:@selector(openHelpPage:) keyEquivalent:@"?"]; mi.target=gController;
+    mi=[helpMenu addItemWithTitle:[gAppName stringByAppendingString:@" Help"] action:@selector(openHelpPage:) keyEquivalent:@"?"]; mi.target=gController;
     [helpMenu addItem:[NSMenuItem separatorItem]];
     mi=[helpMenu addItemWithTitle:@"kryoterm on GitHub" action:@selector(openGitHub:) keyEquivalent:@""]; mi.target=gController;
     [helpItem setSubmenu:helpMenu];
@@ -914,7 +915,10 @@ int main(int argc, const char *argv[]) {
         else { NSString *here=[[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
                kp0 = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]); }
 
-        setenv("TERM_PROGRAM", "kryoterm", 1);
+        NSString *bn = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"];
+        if (bn.length) gAppName = bn;
+
+        setenv("TERM_PROGRAM", gAppName.UTF8String, 1);
         setenv("TERM_PROGRAM_VERSION", "1.7", 1);
         setenv("TERM", "xterm-256color", 1);
         const char *curPath = getenv("PATH");
@@ -928,6 +932,13 @@ int main(int argc, const char *argv[]) {
             return [s hasPrefix:@"/"] ? s : [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:s]; };
         gExecPath = abspath(argv[0]);
         gKPath = abspath(kp0);
+        // host app may launch a bundled program (e.g. kcode) instead of the shell;
+        // resolve a relative KRYOTERM_EXEC against the engine's own directory.
+        const char *kx = getenv("KRYOTERM_EXEC");
+        if (kx && kx[0] && kx[0] != '/') {
+            NSString *abs = [[gKPath stringByDeletingLastPathComponent] stringByAppendingPathComponent:[NSString stringWithUTF8String:kx]];
+            setenv("KRYOTERM_EXEC", [abs fileSystemRepresentation], 1);
+        }
         const char *home = getenv("HOME"); if (home) chdir(home);
 
         gPanes = [NSMutableArray array];
