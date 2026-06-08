@@ -217,7 +217,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0,0,0,0" + fromCharCode(1) + fromCharCode(1)
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0,0,0,0,1" + fromCharCode(1) + fromCharCode(1)
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -249,6 +249,7 @@ func gridFeed(state, s, cols, rows) {
     let altActive = _cf(tail, 10)        // alt screen (1049/1047/47) currently active
     let savedAltCr = _cf(tail, 11)       // main cursor saved on alt-enter
     let savedAltCc = _cf(tail, 12)
+    let cvis = _cf(tail, 13)             // cursor visible (DECSET 25); 0 = hidden
     let scrolled = ""                    // rows scrolled off THIS feed (reset each call)
     let bell = 0                         // bare BEL (0x07) seen THIS feed (reset each call)
     let n = len(s)
@@ -317,6 +318,7 @@ func gridFeed(state, s, cols, rows) {
                                 if mode == 1002 { if on == 1 { mlevel = 2 } else { mlevel = 0 } }  // button-drag
                                 if mode == 1003 { if on == 1 { mlevel = 3 } else { mlevel = 0 } }  // any-motion
                                 if mode == 1006 { msgr = on }                                      // SGR encoding
+                                if mode == 25 { cvis = on }                                        // cursor show/hide
                                 if mode == 1049 || mode == 1047 || mode == 47 {                    // alt screen
                                     if on == 1 {
                                         if altActive == 0 {
@@ -412,7 +414,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
@@ -547,7 +549,9 @@ func oscTitle(s, old) {
 // gridCursor(state, cols, rows) — the cursor position as "row,col" (0-based).
 func gridCursor(state, cols, rows) {
     let total = cols * rows
-    let tail = substring(state, 7 * total + 1, len(state))
+    let tailFull = substring(state, 7 * total + 1, len(state))
+    let tail = substring(tailFull, 0, indexOf(tailFull, fromCharCode(1)))
+    if _cf(tail, 13) == 0 { emit "9999,0" }      // cursor hidden (DECSET 25 off)
     emit _cf(tail, 0) + "," + _cf(tail, 1)
 }
 
