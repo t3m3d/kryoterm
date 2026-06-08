@@ -32,6 +32,7 @@ static int   gScrollOff = 0, gScrollMax = 0;   // scrollback view position
 static int   gMatchRow = -1, gMatchCol = 0, gMatchLen = 0;   // find highlight (view-relative)
 static int   gMatchNum = 0, gMatchTotal = 0;                 // "N of M" matches
 static int   gMouseLevel = 0, gMouseSgr = 0;                 // app mouse tracking + SGR encoding
+static int   gCursorShape = 0;                              // app cursor shape (DECSCUSR): 0 config, 1 bar, 2 block, 3 underline
 static BOOL  gMouseReporting = NO;                           // current drag is a reported mouse press
 static int   gLastMouseR = -1, gLastMouseC = -1;            // throttle motion reports
 static int   gMousePressBtn = 0;                            // button held (for the release report)
@@ -525,11 +526,12 @@ static void sendScrollbackCap(void) {
             [cc set];
             NSFrameRect(NSMakeRect(x, y, gCharW, gLineH));
         } else if (gCursorOn) {
+            int style = gCursorShape > 0 ? gCursorShape - 1 : gCursorStyle;   // app DECSCUSR overrides config
             NSRect r;
-            if (gCursorStyle == 1)      { r = NSMakeRect(x, y, gCharW, gLineH);            // block
-                                          cc = [cc colorWithAlphaComponent:0.45]; }        // (glyph shows through)
-            else if (gCursorStyle == 2) { r = NSMakeRect(x, y + gLineH - 2, gCharW, 2); }  // underline
-            else                        { r = NSMakeRect(x, y, 2.0, gLineH); }             // bar
+            if (style == 1)      { r = NSMakeRect(x, y, gCharW, gLineH);            // block
+                                   cc = [cc colorWithAlphaComponent:0.45]; }        // (glyph shows through)
+            else if (style == 2) { r = NSMakeRect(x, y + gLineH - 2, gCharW, 2); }  // underline
+            else                 { r = NSMakeRect(x, y, 2.0, gLineH); }             // bar
             [cc set];
             NSRectFill(r);
         }
@@ -692,21 +694,21 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            // header = row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,title
-                            int fv[12] = {0,0,0,0,0,0,0,0,0,0,0,0}; int neg[12] = {0,0,0,0,0,0,0,0,0,0,0,0};
+                            // header = row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,cshape,title
+                            int fv[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0}; int neg[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
                             int field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 12) { titleStart = m+1; break; } }
-                                else if (field < 12) {
+                                if (p[m] == ',') { field++; if (field == 13) { titleStart = m+1; break; } }
+                                else if (field < 13) {
                                     if (p[m] == '-') neg[field] = 1;
                                     else if (p[m] >= '0' && p[m] <= '9') fv[field] = fv[field]*10 + (p[m]-'0');
                                 }
                             }
-                            for (int q = 0; q < 12; q++) if (neg[q]) fv[q] = -fv[q];
+                            for (int q = 0; q < 13; q++) if (neg[q]) fv[q] = -fv[q];
                             gCurRow = fv[0]; gCurCol = fv[1]; gScrollOff = fv[2]; gScrollMax = fv[3];
                             gMatchRow = fv[4]; gMatchCol = fv[5]; gMatchLen = fv[6];
                             gMatchNum = fv[7]; gMatchTotal = fv[8];
-                            gMouseLevel = fv[10]; gMouseSgr = fv[11];
+                            gMouseLevel = fv[10]; gMouseSgr = fv[11]; gCursorShape = fv[12];
                             if (fv[9] == 1) {                       // bell
                                 if (gBellMode == 2) NSBeep();
                                 else if (gBellMode == 1) {

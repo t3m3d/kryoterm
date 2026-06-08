@@ -219,8 +219,8 @@ func kryoterm_interactive(shellPath, cols, rows) {
                 body = gridScrollView(scrollback, body, rows, scrollOff)
             }
             // header: row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,matchNum,matchTotal,bell,title
-            // header: row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,title
-            let frame = soh + cur + "," + scrollOff + "," + smax + "," + findResult + "," + bellOn + "," + gridMouse(st, cols, rows) + "," + title + soh + body + ff
+            // header: row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,cshape,title
+            let frame = soh + cur + "," + scrollOff + "," + smax + "," + findResult + "," + bellOn + "," + gridMouse(st, cols, rows) + "," + gridShape(st, cols, rows) + "," + title + soh + body + ff
             // write() to a pty can be PARTIAL (small kernel buffer); loop or the
             // frame (and its terminating \f) gets truncated and the shim never
             // sees a complete frame.

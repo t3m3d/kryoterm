@@ -217,7 +217,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0,0,0,0,1" + fromCharCode(1) + fromCharCode(1)
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0,0,0,0,1,0" + fromCharCode(1) + fromCharCode(1)
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -250,6 +250,7 @@ func gridFeed(state, s, cols, rows) {
     let savedAltCr = _cf(tail, 11)       // main cursor saved on alt-enter
     let savedAltCc = _cf(tail, 12)
     let cvis = _cf(tail, 13)             // cursor visible (DECSET 25); 0 = hidden
+    let cshape = _cf(tail, 14)           // app cursor shape (DECSCUSR): 0 config, 1 bar, 2 block, 3 underline
     let scrolled = ""                    // rows scrolled off THIS feed (reset each call)
     let bell = 0                         // bare BEL (0x07) seen THIS feed (reset each call)
     let n = len(s)
@@ -282,6 +283,13 @@ func gridFeed(state, s, cols, rows) {
                         if fin == 109 { pen = _applySgr(pen, params) }       // 'm' SGR colour
                         if fin == 115 { scr = cr  scc = cc  spen = pen }     // 's' save cursor
                         if fin == 117 { cr = scr  cc = scc  pen = spen }     // 'u' restore cursor
+                        if fin == 113 {                  // 'q' DECSCUSR — app cursor shape
+                            let ps = _leadInt(params, 0)
+                            if ps == 0 { cshape = 0 }                  // reset -> config default
+                            if ps == 1 || ps == 2 { cshape = 2 }       // block
+                            if ps == 3 || ps == 4 { cshape = 3 }       // underline
+                            if ps == 5 || ps == 6 { cshape = 1 }       // bar
+                        }
                         if fin == 74 {                   // 'J' erase in display (honour param)
                             let pj = _leadInt(params, 0)
                             let ja = 0
@@ -414,7 +422,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
@@ -563,6 +571,15 @@ func gridMouse(state, cols, rows) {
     let sohp = indexOf(tailFull, fromCharCode(1))
     let tail = substring(tailFull, 0, sohp)
     emit _cf(tail, 8) + "," + _cf(tail, 9)
+}
+
+// gridShape(state, cols, rows) — app-requested cursor shape (DECSCUSR):
+// 0 = use config default, 1 = bar, 2 = block, 3 = underline.
+func gridShape(state, cols, rows) {
+    let total = cols * rows
+    let tailFull = substring(state, 7 * total + 1, len(state))
+    let tail = substring(tailFull, 0, indexOf(tailFull, fromCharCode(1)))
+    emit _cf(tail, 14)
 }
 
 // gridBell(state, cols, rows) — 1 if a bare BEL (0x07) arrived during the last
