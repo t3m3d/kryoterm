@@ -215,7 +215,7 @@ static void sendResize(NSView *v) {
     if (rows < 2) rows = 2;
     gCols = cols; gRows = rows;
     char buf[64];
-    int len = snprintf(buf, sizeof buf, "\x1eR,%d,%d\x1e", cols, rows);
+    int len = snprintf(buf, sizeof buf, "\036R,%d,%d\036", cols, rows);
     write(gMaster, buf, len);
 }
 
@@ -235,8 +235,8 @@ static void sendResize(NSView *v) {
     if (lines == 0) return;
     acc -= lines * gLineH;
     char buf[32];
-    if (lines > 0) snprintf(buf, sizeof buf, "\x1eU,%d\x1e", lines);    // up into history
-    else           snprintf(buf, sizeof buf, "\x1eD,%d\x1e", -lines);   // back toward live
+    if (lines > 0) snprintf(buf, sizeof buf, "\036U,%d\036", lines);    // up into history
+    else           snprintf(buf, sizeof buf, "\036D,%d\036", -lines);   // back toward live
     write(gMaster, buf, strlen(buf));
 }
 
