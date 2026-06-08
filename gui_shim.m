@@ -29,6 +29,8 @@ static int   gCurRow = 0, gCurCol = 0;   // cursor cell (from each frame's heade
 static BOOL  gCursorOn = YES;            // blink phase
 static int   gCols = 104, gRows = 30;    // current grid size (set on resize)
 static int   gScrollOff = 0, gScrollMax = 0;   // scrollback view position
+static int   gMatchRow = -1, gMatchCol = 0, gMatchLen = 0;   // find highlight (view-relative)
+static NSTextField *gSearchField;        // ⌘F search bar
 static int   gSelAR = 0, gSelAC = 0, gSelER = 0, gSelEC = 0;   // selection anchor/end
 static BOOL  gHasSel = NO;
 static NSFont *gFont;
@@ -231,7 +233,7 @@ static void sendResize(NSView *v) {
     write(gMaster, buf, len);
 }
 
-@interface KryptonView : NSView
+@interface KryptonView : NSView <NSTextFieldDelegate>
 @property (strong) NSAttributedString *attr;   // the latest frame
 @end
 
@@ -250,6 +252,31 @@ static void sendResize(NSView *v) {
     if (lines > 0) snprintf(buf, sizeof buf, "\036U,%d\036", lines);    // up into history
     else           snprintf(buf, sizeof buf, "\036D,%d\036", -lines);   // back toward live
     write(gMaster, buf, strlen(buf));
+}
+
+// ---- find-in-scrollback ----
+- (void)sendFind:(NSString *)cmd query:(NSString *)q {
+    if (gMaster < 0) return;
+    NSString *msg = [NSString stringWithFormat:@"\036%@,%@\036", cmd, q ?: @""];
+    const char *b = [msg UTF8String]; write(gMaster, b, strlen(b));
+}
+- (void)openSearch {
+    gSearchField.hidden = NO;
+    gSearchField.stringValue = @"";
+    [self.window makeFirstResponder:gSearchField];
+}
+- (void)closeSearch {
+    gSearchField.hidden = YES;
+    if (gMaster >= 0) write(gMaster, "\036X,0\036", 5);
+    [self.window makeFirstResponder:self];
+}
+- (void)controlTextDidChange:(NSNotification *)n {
+    [self sendFind:@"F" query:gSearchField.stringValue];   // live search, resets to newest match
+}
+- (BOOL)control:(NSControl *)c textView:(NSTextView *)tv doCommandBySelector:(SEL)sel {
+    if (sel == @selector(insertNewline:))   { [self sendFind:@"N" query:gSearchField.stringValue]; return YES; }  // next
+    if (sel == @selector(cancelOperation:)) { [self closeSearch]; return YES; }                                    // Esc
+    return NO;
 }
 
 // ---- mouse selection ----
@@ -354,6 +381,11 @@ static void sendResize(NSView *v) {
             NSRectFill(NSMakeRect(kPadX + a*gCharW, kPadY + r*gLineH, (b-a)*gCharW, gLineH));
         }
     }
+    // find-match highlight
+    if (gMatchRow >= 0 && gMatchLen > 0) {
+        [[NSColor colorWithCalibratedRed:0.96 green:0.80 blue:0.25 alpha:0.5] set];
+        NSRectFill(NSMakeRect(kPadX + gMatchCol*gCharW, kPadY + gMatchRow*gLineH, gMatchLen*gCharW, gLineH));
+    }
     // scroll-position thumb on the right edge (only while viewing history)
     if (gScrollOff > 0 && gScrollMax > 0) {
         CGFloat H = self.bounds.size.height, total = gScrollMax + gRows;
@@ -373,6 +405,7 @@ static void sendResize(NSView *v) {
         if ([ch isEqualToString:@"c"]) { [self copySelection]; return; }
         if ([ch isEqualToString:@"v"]) { [self pasteClipboard]; return; }
         if ([ch isEqualToString:@"k"]) { write(gMaster, "\036C,0\036", 5); return; }  // clear
+        if ([ch isEqualToString:@"f"]) { [self openSearch]; return; }                  // find
         if ([ch isEqualToString:@"="] || [ch isEqualToString:@"+"]) {                  // zoom in
             gFontSize += 1; applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
         }
@@ -457,18 +490,19 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            // header = row,col,scrollOff,scrollMax,title
-                            int cr = 0, cc = 0, so = 0, smax = 0, field = 0; NSUInteger titleStart = 0;
+                            // header = row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,title
+                            int fv[7] = {0,0,0,0,0,0,0}; int neg[7] = {0,0,0,0,0,0,0};
+                            int field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 4) { titleStart = m+1; break; } }
-                                else if (p[m] >= '0' && p[m] <= '9') {
-                                    if (field == 0) cr = cr*10 + (p[m]-'0');
-                                    else if (field == 1) cc = cc*10 + (p[m]-'0');
-                                    else if (field == 2) so = so*10 + (p[m]-'0');
-                                    else if (field == 3) smax = smax*10 + (p[m]-'0');
+                                if (p[m] == ',') { field++; if (field == 7) { titleStart = m+1; break; } }
+                                else if (field < 7) {
+                                    if (p[m] == '-') neg[field] = 1;
+                                    else if (p[m] >= '0' && p[m] <= '9') fv[field] = fv[field]*10 + (p[m]-'0');
                                 }
                             }
-                            gCurRow = cr; gCurCol = cc; gScrollOff = so; gScrollMax = smax;
+                            for (int q = 0; q < 7; q++) if (neg[q]) fv[q] = -fv[q];
+                            gCurRow = fv[0]; gCurCol = fv[1]; gScrollOff = fv[2]; gScrollMax = fv[3];
+                            gMatchRow = fv[4]; gMatchCol = fv[5]; gMatchLen = fv[6];
                             if (titleStart && titleStart < k) {
                                 NSString *t = [[NSString alloc] initWithBytes:p+titleStart length:k-titleStart encoding:NSUTF8StringEncoding];
                                 if (t.length) [gWin setTitle:t];
@@ -543,6 +577,16 @@ int main(int argc, const char *argv[]) {
         gView = [[KryptonView alloc] initWithFrame:frame];
         [gView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [win setContentView:gView];
+
+        // ⌘F search bar — top-right, hidden until opened, sticks to the corner.
+        gSearchField = [[NSTextField alloc] initWithFrame:NSMakeRect(frame.size.width-230, 4, 220, 24)];
+        gSearchField.delegate = gView;
+        gSearchField.hidden = YES;
+        gSearchField.bezeled = YES;
+        gSearchField.font = [NSFont systemFontOfSize:12];
+        [gSearchField.cell setPlaceholderString:@"find in scrollback…"];
+        [gSearchField setAutoresizingMask:(NSViewMinXMargin | NSViewMaxYMargin)];
+        [gView addSubview:gSearchField];
         [win setInitialFirstResponder:gView];
         [win center];
         [win makeKeyAndOrderFront:nil];

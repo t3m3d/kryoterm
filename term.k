@@ -520,6 +520,69 @@ func gridScrolled(state, cols, rows) {
     emit substring(tailFull, sohp + 1, len(tailFull))
 }
 
+// _stripSgrLine(s) — drop ESC[…<final> sequences so a line is searchable plain text.
+func _stripSgrLine(s) {
+    let out = sbNew()
+    let i = 0
+    let n = len(s)
+    while i < n {
+        let c = charCode(substring(s, i, i + 1))
+        if c == 27 {
+            i = i + 1
+            if i < n && charCode(substring(s, i, i + 1)) == 91 { i = i + 1 }   // '['
+            let done = 0
+            while i < n && done == 0 {
+                let k = charCode(substring(s, i, i + 1))
+                i = i + 1
+                if k >= 64 && k <= 126 { done = 1 }                            // CSI final byte
+            }
+        } else {
+            out = sbAppend(out, substring(s, i, i + 1))
+            i = i + 1
+        }
+    }
+    emit sbToString(out)
+}
+
+// gridFind(scrollback, gridText, rows, query, matchIdx) — find the matchIdx-th
+// occurrence of query (counting from the most recent line up), wrapping. Returns
+// "scrollOff,matchRow,matchCol,matchLen" to bring it into view + highlight it, or
+// "-1,-1,-1,-1" if no match / empty query.
+func gridFind(scrollback, gridText, rows, query, matchIdx) {
+    if len(query) == 0 { emit "-1,-1,-1,-1" }
+    let combined = scrollback + gridText
+    let nLines = lineCount(combined)
+    let total = 0
+    let li = nLines - 1
+    while li >= 0 {
+        if indexOf(_stripSgrLine(getLine(combined, li)), query) >= 0 { total = total + 1 }
+        li = li - 1
+    }
+    if total == 0 { emit "-1,-1,-1,-1" }
+    let mi = matchIdx
+    while mi >= total { mi = mi - total }
+    while mi < 0 { mi = mi + total }
+    let seen = 0
+    let foundLine = 0 - 1
+    let foundCol = 0
+    li = nLines - 1
+    while li >= 0 && foundLine < 0 {
+        let pos = indexOf(_stripSgrLine(getLine(combined, li)), query)
+        if pos >= 0 {
+            if seen == mi { foundLine = li  foundCol = pos }
+            seen = seen + 1
+        }
+        li = li - 1
+    }
+    let scrollOff = nLines - rows - foundLine + (rows / 3)   // place match ~1/3 down
+    let smax = nLines - rows
+    if smax < 0 { smax = 0 }
+    if scrollOff < 0 { scrollOff = 0 }
+    if scrollOff > smax { scrollOff = smax }
+    let viewStart = nLines - rows - scrollOff
+    emit scrollOff + "," + (foundLine - viewStart) + "," + foundCol + "," + len(query)
+}
+
 // gridScrollView(scrollback, gridText, rows, scrollOff) — `rows` lines of the
 // combined (scrollback ++ live grid) buffer, scrolled `scrollOff` lines up from
 // the bottom. scrollOff 0 = the live screen.

@@ -85,6 +85,9 @@ func kryoterm_interactive(shellPath, cols, rows) {
     let title = ""                        // window title (OSC 0/2 from the shell)
     let scrollback = ""                   // history lines that scrolled off the top
     let scrollOff = 0                     // view offset (lines up from the bottom; 0=live)
+    let findQuery = ""                    // active find-in-scrollback query
+    let findIdx = 0                       // which match (0 = most recent), wraps
+    let findResult = "-1,-1,-1"           // matchRow,matchCol,matchLen for the shim to highlight
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
@@ -133,6 +136,18 @@ func kryoterm_interactive(shellPath, cols, rows) {
                             st = gridNew(cols, rows)
                             fdWrite(m, fromCharCode(12), 1)   // Ctrl-L -> shell redraws prompt
                             dirty = 1  quiet = 2
+                        }
+                        if cmd == "F" { findQuery = args  findIdx = 0  dirty = 1  quiet = 2 }   // new search
+                        if cmd == "N" { findIdx = findIdx + 1  dirty = 1  quiet = 2 }            // next match
+                        if cmd == "P" { findIdx = findIdx - 1  dirty = 1  quiet = 2 }            // prev match
+                        if cmd == "X" { findQuery = ""  findResult = "-1,-1,-1"  scrollOff = 0  dirty = 1  quiet = 2 }
+                        if cmd == "F" || cmd == "N" || cmd == "P" {
+                            let res = gridFind(scrollback, gridRender(st, cols, rows), rows, findQuery, findIdx)
+                            let c1 = indexOf(res, ",")
+                            let so = toInt(substring(res, 0, c1))
+                            if so < 0 { so = 0 }
+                            scrollOff = so
+                            findResult = substring(res, c1 + 1, len(res))
                         }
                     }
                     keys = substring(keys, 0, mi) + substring(rest, mj + 1, len(rest))
@@ -194,8 +209,8 @@ func kryoterm_interactive(shellPath, cols, rows) {
                 cur = "9999,0"
                 body = gridScrollView(scrollback, body, rows, scrollOff)
             }
-            // header: row,col,scrollOff,scrollMax,title  (title last, may hold commas)
-            let frame = soh + cur + "," + scrollOff + "," + smax + "," + title + soh + body + ff
+            // header: row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,title
+            let frame = soh + cur + "," + scrollOff + "," + smax + "," + findResult + "," + title + soh + body + ff
             // write() to a pty can be PARTIAL (small kernel buffer); loop or the
             // frame (and its terminating \f) gets truncated and the shim never
             // sees a complete frame.
