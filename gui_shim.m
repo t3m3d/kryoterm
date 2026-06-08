@@ -251,7 +251,7 @@ static void sendScrollbackCap(void) {
 @implementation KryptonView
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)isFlipped { return YES; }              // text origin at top-left
-- (void)viewDidEndLiveResize { sendResize(self); }   // reflow grid when drag ends
+- (void)viewDidEndLiveResize { gHasSel = NO; sendResize(self); }   // reflow; stale selection gone
 - (void)scrollWheel:(NSEvent *)e {                   // wheel -> scrollback
     if (gMaster < 0 || gLineH < 1) return;
     static CGFloat acc = 0;
@@ -492,6 +492,10 @@ static void sendScrollbackCap(void) {
         if ([ch isEqualToString:@"k"]) { write(gMaster, "\036C,0\036", 5); return; }  // clear
         if ([ch isEqualToString:@"f"]) { [self openSearch]; return; }                  // find
         if ([ch isEqualToString:@"n"]) { [self newWindow]; return; }                   // new window
+        if ([ch isEqualToString:@"a"]) {                                               // select all visible
+            gSelAR = 0; gSelAC = 0; gSelER = gRows - 1; gSelEC = gCols; gHasSel = YES;
+            [self setNeedsDisplay:YES]; return;
+        }
         if ([ch isEqualToString:@"g"]) { write(gMaster, "\036N,\036", 4); return; }    // ⌘G  next match
         if ([ch isEqualToString:@"G"]) { write(gMaster, "\036P,\036", 4); return; }    // ⌘⇧G prev match
         if ([ch isEqualToString:@"="] || [ch isEqualToString:@"+"]) {                  // zoom in
