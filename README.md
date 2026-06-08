@@ -22,6 +22,7 @@ native `waitChild` builtin and shuts down.
 
 ```bash
 ./gui.sh          # builds the shim if needed, launches the windowed terminal
+./build_app.sh    # assemble kryoterm.app — then double-click in Finder / Spotlight
 ```
 
 `gui.sh` runs `kryoterm-gui` (the Obj-C shim) against the pure-Krypton
