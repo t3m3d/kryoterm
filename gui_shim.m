@@ -49,6 +49,8 @@ static NSColor *gTbLight, *gTbDark, *gBgLight, *gBgDark, *gCurBg;
 static NSWindow *gWin;
 static int gBlinkMs = 530;               // cursor blink half-period; 0 = steady
 static NSTimer *gBlink;
+static NSColor *gCursorColor;            // cursor colour
+static int gCursorStyle = 0;             // 0 bar | 1 block | 2 underline
 
 static NSColor *hexColor(const char *h, NSColor *fallback) {
     while (*h == '#' || *h == ' ' || *h == '\t') h++;
@@ -65,6 +67,7 @@ static BOOL systemIsDark(void) {
 static void loadConfig(void) {
     gTbLight = hexColor("#2b2b2b", nil);  gTbDark = hexColor("#000000", nil);
     gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
+    gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
     NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -80,7 +83,9 @@ static void loadConfig(void) {
            "background_dark  = #000000\n"
            "\n"
            "# Cursor blink half-period in milliseconds (0 = steady, no blink).\n"
-           "cursor_blink_ms  = 530\n";
+           "cursor_blink_ms  = 530\n"
+           "cursor_color     = #d8dad4\n"
+           "cursor_style     = bar          # bar | block | underline\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -92,9 +97,14 @@ static void loadConfig(void) {
         NSString *k = [[line substringToIndex:eq.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         NSString *v = [[line substringFromIndex:eq.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         if ([k isEqualToString:@"cursor_blink_ms"]) { gBlinkMs = atoi(v.UTF8String); continue; }
+        if ([k isEqualToString:@"cursor_style"]) {
+            gCursorStyle = [v hasPrefix:@"block"] ? 1 : ([v hasPrefix:@"under"] ? 2 : 0);
+            continue;
+        }
         NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
-        if      ([k isEqualToString:@"titlebar_light"])   gTbLight = c;
+        if      ([k isEqualToString:@"cursor_color"])     gCursorColor = c;
+        else if ([k isEqualToString:@"titlebar_light"])   gTbLight = c;
         else if ([k isEqualToString:@"titlebar_dark"])    gTbDark  = c;
         else if ([k isEqualToString:@"background_light"]) gBgLight = c;
         else if ([k isEqualToString:@"background_dark"])  gBgDark  = c;
@@ -184,10 +194,17 @@ static NSAttributedString *parseFrame(NSData *data) {
     [(gCurBg ?: [NSColor blackColor]) set];
     NSRectFill(self.bounds);
     if (self.attr) [self.attr drawAtPoint:NSMakePoint(kPadX, kPadY)];
-    // thin vertical-bar cursor at the shell's cursor cell (focused + blink-on)
+    // cursor at the shell's cursor cell (focused + blink-on); style from config.
     if (self.window.isKeyWindow && gCursorOn) {
-        [[NSColor colorWithCalibratedRed:0.85 green:0.87 blue:0.83 alpha:0.95] set];
-        NSRectFill(NSMakeRect(kPadX + gCurCol * gCharW, kPadY + gCurRow * gLineH, 2.0, gLineH));
+        NSColor *cc = gCursorColor ?: [NSColor whiteColor];
+        CGFloat x = kPadX + gCurCol * gCharW, y = kPadY + gCurRow * gLineH;
+        NSRect r;
+        if (gCursorStyle == 1)      { r = NSMakeRect(x, y, gCharW, gLineH);            // block
+                                      cc = [cc colorWithAlphaComponent:0.45]; }        // (glyph shows through)
+        else if (gCursorStyle == 2) { r = NSMakeRect(x, y + gLineH - 2, gCharW, 2); }  // underline
+        else                        { r = NSMakeRect(x, y, 2.0, gLineH); }             // bar
+        [cc set];
+        NSRectFill(r);
     }
 }
 - (void)keyDown:(NSEvent *)e {
