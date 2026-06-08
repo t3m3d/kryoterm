@@ -14,9 +14,12 @@ APP="kryoterm.app"
 [ -x kryoterm ] || { echo "build_app.sh: ./kryoterm missing — build it first:"; \
                      echo "  kcc --native run.k -o kryoterm  (then codesign -s - -f kryoterm)"; exit 1; }
 
+[ -f kryoterm.icns ] || ./make_icon.sh
+
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp kryoterm-gui kryoterm "$APP/Contents/MacOS/"
+cp kryoterm.icns "$APP/Contents/Resources/" 2>/dev/null || true
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -26,6 +29,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key>              <string>kryoterm</string>
   <key>CFBundleDisplayName</key>       <string>kryoterm</string>
   <key>CFBundleExecutable</key>        <string>kryoterm-gui</string>
+  <key>CFBundleIconFile</key>          <string>kryoterm</string>
   <key>CFBundleIdentifier</key>        <string>org.krypton.kryoterm</string>
   <key>CFBundleVersion</key>           <string>1.0</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
