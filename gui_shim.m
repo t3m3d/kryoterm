@@ -719,6 +719,20 @@ int main(int argc, const char *argv[]) {
 
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+
+        // Minimal menu bar so the app shows its name + ⌘Q quits. (Copy/paste/
+        // select-all stay on the view's keyDown path — adding them here with key
+        // equivalents would hijack ⌘C/⌘V/⌘A before keyDown sees them.)
+        NSMenu *mainMenu = [[NSMenu alloc] init];
+        NSMenuItem *appItem = [[NSMenuItem alloc] init];
+        [mainMenu addItem:appItem];
+        NSMenu *appMenu = [[NSMenu alloc] init];
+        [appMenu addItemWithTitle:@"About kryoterm" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+        [appMenu addItem:[NSMenuItem separatorItem]];
+        [appMenu addItemWithTitle:@"Quit kryoterm" action:@selector(terminate:) keyEquivalent:@"q"];
+        [appItem setSubmenu:appMenu];
+        [NSApp setMainMenu:mainMenu];
+
         loadConfig();
         applyFont();   // resolve the configured font + cache cell metrics
 
