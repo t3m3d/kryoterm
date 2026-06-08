@@ -189,11 +189,13 @@ func kryoterm_interactive(shellPath, cols, rows) {
             let soh = fromCharCode(1)
             let cur = gridCursor(st, cols, rows)
             let body = gridRender(st, cols, rows)
+            let smax = lineCount(scrollback)
             if scrollOff > 0 {                 // viewing history: window the buffer, hide cursor
                 cur = "9999,0"
                 body = gridScrollView(scrollback, body, rows, scrollOff)
             }
-            let frame = soh + cur + "," + title + soh + body + ff
+            // header: row,col,scrollOff,scrollMax,title  (title last, may hold commas)
+            let frame = soh + cur + "," + scrollOff + "," + smax + "," + title + soh + body + ff
             // write() to a pty can be PARTIAL (small kernel buffer); loop or the
             // frame (and its terminating \f) gets truncated and the shim never
             // sees a complete frame.

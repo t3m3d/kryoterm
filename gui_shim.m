@@ -28,6 +28,7 @@ static pid_t gChild  = -1;
 static int   gCurRow = 0, gCurCol = 0;   // cursor cell (from each frame's header)
 static BOOL  gCursorOn = YES;            // blink phase
 static int   gCols = 104, gRows = 30;    // current grid size (set on resize)
+static int   gScrollOff = 0, gScrollMax = 0;   // scrollback view position
 static int   gSelAR = 0, gSelAC = 0, gSelER = 0, gSelEC = 0;   // selection anchor/end
 static BOOL  gHasSel = NO;
 static NSFont *gFont;
@@ -336,6 +337,17 @@ static void sendResize(NSView *v) {
             NSRectFill(NSMakeRect(kPadX + a*gCharW, kPadY + r*gLineH, (b-a)*gCharW, gLineH));
         }
     }
+    // scroll-position thumb on the right edge (only while viewing history)
+    if (gScrollOff > 0 && gScrollMax > 0) {
+        CGFloat H = self.bounds.size.height, total = gScrollMax + gRows;
+        CGFloat thumbH = (gRows / total) * H;
+        if (thumbH < 24) thumbH = 24;
+        CGFloat y = ((CGFloat)(gScrollMax - gScrollOff) / total) * H;
+        if (y + thumbH > H) y = H - thumbH;
+        if (y < 0) y = 0;
+        [[NSColor colorWithCalibratedRed:0.72 green:0.74 blue:0.70 alpha:0.5] set];
+        NSRectFill(NSMakeRect(self.bounds.size.width - 5, y, 3, thumbH));
+    }
 }
 - (void)keyDown:(NSEvent *)e {
     if (gMaster < 0) return;
@@ -425,13 +437,18 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            int cr = 0, cc = 0, field = 0; NSUInteger titleStart = 0;
+                            // header = row,col,scrollOff,scrollMax,title
+                            int cr = 0, cc = 0, so = 0, smax = 0, field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 2) { titleStart = m+1; break; } }
-                                else if (p[m] >= '0' && p[m] <= '9')
-                                    { if (field == 0) cr = cr*10 + (p[m]-'0'); else if (field == 1) cc = cc*10 + (p[m]-'0'); }
+                                if (p[m] == ',') { field++; if (field == 4) { titleStart = m+1; break; } }
+                                else if (p[m] >= '0' && p[m] <= '9') {
+                                    if (field == 0) cr = cr*10 + (p[m]-'0');
+                                    else if (field == 1) cc = cc*10 + (p[m]-'0');
+                                    else if (field == 2) so = so*10 + (p[m]-'0');
+                                    else if (field == 3) smax = smax*10 + (p[m]-'0');
+                                }
                             }
-                            gCurRow = cr; gCurCol = cc;
+                            gCurRow = cr; gCurCol = cc; gScrollOff = so; gScrollMax = smax;
                             if (titleStart && titleStart < k) {
                                 NSString *t = [[NSString alloc] initWithBytes:p+titleStart length:k-titleStart encoding:NSUTF8StringEncoding];
                                 if (t.length) [gWin setTitle:t];
