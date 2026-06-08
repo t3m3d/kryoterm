@@ -217,7 +217,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0,0,0,0,1,0" + fromCharCode(1) + fromCharCode(1)
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0,0,0,0,1,0,0" + fromCharCode(1) + fromCharCode(1)
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -251,6 +251,7 @@ func gridFeed(state, s, cols, rows) {
     let savedAltCc = _cf(tail, 12)
     let cvis = _cf(tail, 13)             // cursor visible (DECSET 25); 0 = hidden
     let cshape = _cf(tail, 14)           // app cursor shape (DECSCUSR): 0 config, 1 bar, 2 block, 3 underline
+    let pasteMode = _cf(tail, 15)        // bracketed paste enabled (DECSET 2004)
     let scrolled = ""                    // rows scrolled off THIS feed (reset each call)
     let bell = 0                         // bare BEL (0x07) seen THIS feed (reset each call)
     let n = len(s)
@@ -327,6 +328,7 @@ func gridFeed(state, s, cols, rows) {
                                 if mode == 1003 { if on == 1 { mlevel = 3 } else { mlevel = 0 } }  // any-motion
                                 if mode == 1006 { msgr = on }                                      // SGR encoding
                                 if mode == 25 { cvis = on }                                        // cursor show/hide
+                                if mode == 2004 { pasteMode = on }                                 // bracketed paste
                                 if mode == 1049 || mode == 1047 || mode == 47 {                    // alt screen
                                     if on == 1 {
                                         if altActive == 0 {
@@ -422,7 +424,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + "," + pasteMode + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
@@ -580,6 +582,14 @@ func gridShape(state, cols, rows) {
     let tailFull = substring(state, 7 * total + 1, len(state))
     let tail = substring(tailFull, 0, indexOf(tailFull, fromCharCode(1)))
     emit _cf(tail, 14)
+}
+
+// gridPaste(state, cols, rows) — 1 if the app enabled bracketed paste (DECSET 2004).
+func gridPaste(state, cols, rows) {
+    let total = cols * rows
+    let tailFull = substring(state, 7 * total + 1, len(state))
+    let tail = substring(tailFull, 0, indexOf(tailFull, fromCharCode(1)))
+    emit _cf(tail, 15)
 }
 
 // gridBell(state, cols, rows) — 1 if a bare BEL (0x07) arrived during the last
