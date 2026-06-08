@@ -249,9 +249,28 @@ static void sendResize(NSView *v) {
     if (r < 0) r = 0;  if (r >= gRows) r = gRows - 1;
     *row = r; *col = c;
 }
+- (void)selectWordRow:(int)r col:(int)c {
+    NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
+    if (r >= (int)lines.count) { gHasSel = NO; return; }
+    NSString *ln = lines[r]; int L = (int)ln.length;
+    if (L == 0) { gHasSel = NO; return; }
+    if (c >= L) c = L - 1;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    int a = c, b = c;
+    while (a > 0 && ![ws characterIsMember:[ln characterAtIndex:a-1]]) a--;
+    while (b < L && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
+    gSelAR = r; gSelAC = a; gSelER = r; gSelEC = b; gHasSel = (b > a);
+}
+- (void)selectLineRow:(int)r {
+    NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
+    int L = (r < (int)lines.count) ? (int)[lines[r] length] : 0;
+    gSelAR = r; gSelAC = 0; gSelER = r; gSelEC = L; gHasSel = (L > 0);
+}
 - (void)mouseDown:(NSEvent *)e {
-    [self pointToCell:e row:&gSelAR col:&gSelAC];
-    gSelER = gSelAR; gSelEC = gSelAC; gHasSel = NO;
+    int r, c; [self pointToCell:e row:&r col:&c];
+    if (e.clickCount == 2)      [self selectWordRow:r col:c];   // word
+    else if (e.clickCount == 3) [self selectLineRow:r];         // line
+    else { gSelAR = r; gSelAC = c; gSelER = r; gSelEC = c; gHasSel = NO; }
     [self setNeedsDisplay:YES];
 }
 - (void)mouseDragged:(NSEvent *)e {
@@ -284,7 +303,12 @@ static void sendResize(NSView *v) {
 }
 - (void)pasteClipboard {
     NSString *t = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
-    if (t.length && gMaster >= 0) { const char *b = [t UTF8String]; write(gMaster, b, strlen(b)); }
+    if (t.length && gMaster >= 0) {
+        const char *b = [t UTF8String];
+        write(gMaster, "\033[200~", 6);    // bracketed paste: shell buffers, doesn't run each line
+        write(gMaster, b, strlen(b));
+        write(gMaster, "\033[201~", 6);
+    }
 }
 - (void)drawRect:(NSRect)dirty {
     [(gCurBg ?: [NSColor blackColor]) set];
