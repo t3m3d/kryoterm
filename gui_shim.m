@@ -1,55 +1,42 @@
-// gui_shim.m — kryoterm GUI surface (TEMPORARY Obj-C shim).
+// gui_shim.m — kryoterm GUI surface (TEMPORARY Obj-C shim), multi-pane edition.
 //
-// The kryoterm terminal ENGINE is pure Krypton: the macho backend's native
-// pty/fd syscall builtins drive a real shell, and term.k renders an ANSI grid
-// (cursor, erase, scroll, fg/bg colour, UTF-8) — including the interactive
-// bridge `kryoterm -i` (keystrokes in on stdin, framed grid out on stdout). The
-// ONE thing Krypton can't do yet is open a window and draw + capture keys —
-// objc_msgSend/AppKit FFI codegen isn't in macho_arm64_self.k. This shim fills
-// exactly that gap: it spawns `kryoterm -i` on a pty, draws each form-feed-
-// delimited frame (parsing the SGR colour term.k emits), and forwards key
-// presses to the pty (→ Krypton stdin → the shell). Delete when objc FFI lands.
+// The kryoterm ENGINE is pure Krypton (term.k grid + `kryoterm -i` pty bridge,
+// driven by macho syscall builtins). This shim is the ONE non-Krypton piece: it
+// opens windows, draws the framed grid term.k emits, and forwards keys — the bit
+// the macho backend can't do yet (no objc_msgSend FFI). Delete when that lands.
 //
-// Build: ./build_gui.sh        Run: ./gui.sh   (or ./kryoterm-gui ./kryoterm)
+// Architecture: one process -> N windows (native macOS tabs share a
+// tabbingIdentifier) -> each window is a tree of NSSplitView panes -> each pane
+// (KryptonView) owns its own `kryoterm -i` engine on two pipes, its own reader
+// thread, and its own per-pane state. AppKit's first-responder routes keys to the
+// focused pane. Config + font + colours are process-shared.
 //
-//   keyboard --> this shim --(pty)--> kryoterm -i --(pty)--> shell
-//   window   <-- this shim <--frames-- kryoterm -i <--------- shell
+// Build: ./build_gui.sh
 
 #import <Cocoa/Cocoa.h>
-#import <util.h>       // forkpty
+#import <util.h>
 #import <termios.h>
 #import <unistd.h>
 #import <signal.h>
 #import <stdarg.h>
 
-static int   gMaster = -1;   // pipe to kryoterm's stdin  (write keystrokes)
-static int   gReadFd = -1;   // pipe from kryoterm's stdout (read frames)
-static pid_t gChild  = -1;
-static int   gCurRow = 0, gCurCol = 0;   // cursor cell (from each frame's header)
-static BOOL  gCursorOn = YES;            // blink phase
-static int   gCols = 104, gRows = 30;    // current grid size (set on resize)
-static int   gScrollOff = 0, gScrollMax = 0;   // scrollback view position
-static int   gMatchRow = -1, gMatchCol = 0, gMatchLen = 0;   // find highlight (view-relative)
-static int   gMatchNum = 0, gMatchTotal = 0;                 // "N of M" matches
-static int   gMouseLevel = 0, gMouseSgr = 0;                 // app mouse tracking + SGR encoding
-static int   gCursorShape = 0;                              // app cursor shape (DECSCUSR): 0 config, 1 bar, 2 block, 3 underline
-static int   gPasteMode = 0;                                // app enabled bracketed paste (DECSET 2004)
-static int   gAltActive = 0;                                // alternate screen active
-static int   gFocusMode = 0;                                // app enabled focus reporting (DECSET 1004)
-static BOOL  gMouseReporting = NO;                           // current drag is a reported mouse press
-static int   gLastMouseR = -1, gLastMouseC = -1;            // throttle motion reports
-static int   gMousePressBtn = 0;                            // button held (for the release report)
-static NSTextField *gSearchField;        // ⌘F search bar
-static NSTextField *gSearchCount;        // "N/M" match counter
-static NSString *gExecPath, *gKPath;     // for ⌘N (re-launch self)
-static int   gSelAR = 0, gSelAC = 0, gSelER = 0, gSelEC = 0;   // selection anchor/end
-static BOOL  gHasSel = NO;
+// ---- shared config / window-level state -----------------------------------
+static NSColor *gTbLight, *gTbDark, *gBgLight, *gBgDark, *gCurBg;
+static int gBlinkMs = 530; static NSTimer *gBlink; static BOOL gCursorOn = YES;
+static NSColor *gCursorColor; static int gCursorStyle = 0;
+static NSString *gFontName = @"JetBrainsMono Nerd Font Mono";
+static CGFloat gFontSize = 13;
 static NSFont *gFont;
 static CGFloat gCharW = 7.8, gLineH = 15.5;
-static CGFloat kPadX = 6, kPadY = 4;     // text origin inside the view (configurable)
+static CGFloat kPadX = 6, kPadY = 4;
+static CGFloat gOpacity = 1.0;
+static BOOL gCopyOnSelect = NO;
+static int gScrollbackLines = 2000;
+static CGFloat gLineSpacing = 0;
+static int gBellMode = 1;
+static NSString *gExecPath, *gKPath;
+static NSMutableArray *gPanes;     // all live KryptonView panes (blink + cleanup)
 
-// Debug log (an agent can't see the window; this is how we diagnose). Tail it:
-//   tail -f /tmp/kryoterm-gui.log
 static void glog(const char *fmt, ...) {
     static FILE *f = NULL;
     if (!f) f = fopen("/tmp/kryoterm-gui.log", "w");
@@ -57,25 +44,6 @@ static void glog(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
     fputc('\n', f); fflush(f);
 }
-
-// ---- theme / config -------------------------------------------------------
-// ~/.config/kryoterm/config sets the titlebar + text-area colours, with a
-// light-mode and a dark-mode value each (the window follows the system
-// appearance live). Auto-created with defaults on first run.
-static NSColor *gTbLight, *gTbDark, *gBgLight, *gBgDark, *gCurBg;
-static NSWindow *gWin;
-static int gBlinkMs = 530;               // cursor blink half-period; 0 = steady
-static NSTimer *gBlink;
-static NSColor *gCursorColor;            // cursor colour
-static int gCursorStyle = 0;             // 0 bar | 1 block | 2 underline
-static NSString *gFontName = @"JetBrainsMono Nerd Font Mono";
-static CGFloat gFontSize = 13;
-static CGFloat gOpacity = 1.0;           // window background opacity (text stays opaque)
-static CGFloat gLineSpacing = 0;         // extra px between rows
-static int gBellMode = 1;                // 0 off | 1 visual flash | 2 audible
-static BOOL gFlashOn = NO;               // visual-bell flash in progress
-static BOOL gCopyOnSelect = NO;          // auto-copy a selection on mouse-up
-static int gScrollbackLines = 2000;      // scrollback history cap
 
 static NSColor *hexColor(const char *h, NSColor *fallback) {
     while (*h == '#' || *h == ' ' || *h == '\t') h++;
@@ -102,29 +70,21 @@ static void loadConfig(void) {
         [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
         NSString *def =
           @"# kryoterm config — colours as #RRGGBB.\n"
-           "# Titlebar and text area, with a light-mode and dark-mode value each;\n"
-           "# the window switches automatically with the system appearance.\n"
            "titlebar_light   = #2b2b2b\n"
            "titlebar_dark    = #000000\n"
            "background_light = #2b2b2b\n"
            "background_dark  = #000000\n"
-           "\n"
-           "# Cursor blink half-period in milliseconds (0 = steady, no blink).\n"
            "cursor_blink_ms  = 530\n"
            "cursor_color     = #d8dad4\n"
            "cursor_style     = bar          # bar | block | underline\n"
-           "\n"
-           "# Font (a Nerd Font keeps the powerline/icon glyphs).\n"
            "font_family      = JetBrainsMono Nerd Font Mono\n"
            "font_size        = 13\n"
-           "\n"
-           "# Window background opacity (0.2-1.0; text stays opaque).\n"
            "opacity          = 1.0\n"
            "padding          = 6\n"
-           "copy_on_select   = false        # auto-copy selection; middle-click pastes\n"
-           "scrollback_lines = 2000\n"
            "line_spacing     = 0\n"
-           "bell             = visual       # visual | audible | off\n";
+           "bell             = visual       # visual | audible | off\n"
+           "copy_on_select   = false        # auto-copy selection; middle-click pastes\n"
+           "scrollback_lines = 2000\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -136,10 +96,7 @@ static void loadConfig(void) {
         NSString *k = [[line substringToIndex:eq.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         NSString *v = [[line substringFromIndex:eq.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         if ([k isEqualToString:@"cursor_blink_ms"]) { gBlinkMs = atoi(v.UTF8String); continue; }
-        if ([k isEqualToString:@"cursor_style"]) {
-            gCursorStyle = [v hasPrefix:@"block"] ? 1 : ([v hasPrefix:@"under"] ? 2 : 0);
-            continue;
-        }
+        if ([k isEqualToString:@"cursor_style"]) { gCursorStyle = [v hasPrefix:@"block"] ? 1 : ([v hasPrefix:@"under"] ? 2 : 0); continue; }
         if ([k isEqualToString:@"font_family"]) { if (v.length) gFontName = v; continue; }
         if ([k isEqualToString:@"font_size"])   { CGFloat fs = atof(v.UTF8String); if (fs >= 6) gFontSize = fs; continue; }
         if ([k isEqualToString:@"opacity"])     { CGFloat o = atof(v.UTF8String); if (o >= 0.2 && o <= 1.0) gOpacity = o; continue; }
@@ -156,9 +113,9 @@ static void loadConfig(void) {
         else if ([k isEqualToString:@"background_light"]) gBgLight = c;
         else if ([k isEqualToString:@"background_dark"])  gBgDark  = c;
     }
+    gCurBg = systemIsDark() ? gBgDark : gBgLight;
 }
 
-// Resolve the configured font and cache its monospace cell metrics.
 static void applyFont(void) {
     gFont = [NSFont fontWithName:gFontName size:gFontSize]
          ?: [NSFont fontWithName:@"JetBrainsMono Nerd Font Mono" size:gFontSize]
@@ -168,26 +125,23 @@ static void applyFont(void) {
     gLineH = [[NSLayoutManager new] defaultLineHeightForFont:gFont] + gLineSpacing;
 }
 
-// xterm256(n) — the xterm 256-colour palette index -> NSColor. term.k re-emits
-// every colour as 38;5;N / 48;5;N, mapping basic codes to indices 0-15.
 static NSColor *xterm256(int n) {
     static const unsigned char base[16][3] = {
         {0,0,0},{205,49,49},{13,188,121},{229,229,16},{36,114,200},{188,63,188},{17,168,205},{204,204,204},
         {102,102,102},{241,76,76},{35,209,139},{245,245,67},{59,142,234},{214,112,214},{41,184,219},{255,255,255}
     };
     if (n < 0) n = 7;
-    if (n < 16)
-        return [NSColor colorWithCalibratedRed:base[n][0]/255.0 green:base[n][1]/255.0 blue:base[n][2]/255.0 alpha:1];
+    if (n < 16) return [NSColor colorWithCalibratedRed:base[n][0]/255.0 green:base[n][1]/255.0 blue:base[n][2]/255.0 alpha:1];
     if (n < 232) {
-        int m = n - 16, lv[6] = {0,95,135,175,215,255};
-        return [NSColor colorWithCalibratedRed:lv[m/36]/255.0 green:lv[(m/6)%6]/255.0 blue:lv[m%6]/255.0 alpha:1];
+        int c = n - 16, r = c / 36, g = (c % 36) / 6, b = c % 6;
+        int sc[6] = {0,95,135,175,215,255};
+        return [NSColor colorWithCalibratedRed:sc[r]/255.0 green:sc[g]/255.0 blue:sc[b]/255.0 alpha:1];
     }
     int v = 8 + (n - 232) * 10;
     return [NSColor colorWithCalibratedRed:v/255.0 green:v/255.0 blue:v/255.0 alpha:1];
 }
 static NSColor *defaultFg(void) { return [NSColor colorWithCalibratedRed:0.82 green:0.84 blue:0.80 alpha:1]; }
 
-// append a run with fg + (optional) bg colour. fg/bg = -1 default, else palette index.
 static void appendRun(NSMutableAttributedString *out, const unsigned char *b,
                       NSUInteger start, NSUInteger len, int fg, int bg, NSFont *font) {
     if (len == 0) return;
@@ -199,14 +153,12 @@ static void appendRun(NSMutableAttributedString *out, const unsigned char *b,
     [out appendAttributedString:[[NSAttributedString alloc] initWithString:s attributes:attrs]];
 }
 
-// Parse one frame's text (plain text + SGR escapes) into a coloured attributed
-// string. term.k already resolved cursor/erase, so only `ESC[..m` appears.
 static NSAttributedString *parseFrame(NSData *data) {
     NSFont *font = gFont;
     NSMutableAttributedString *out = [[NSMutableAttributedString alloc] init];
     const unsigned char *b = data.bytes;
     NSUInteger n = data.length, i = 0, runStart = 0;
-    int curFg = -1, curBg = -1;          // -1 = default; else palette index 0-255
+    int curFg = -1, curBg = -1;
     while (i < n) {
         if (b[i] == 0x1b && i + 1 < n && b[i+1] == '[') {
             appendRun(out, b, runStart, i - runStart, curFg, curBg, font);
@@ -216,8 +168,8 @@ static NSAttributedString *parseFrame(NSData *data) {
                 if (p >= '0' && p <= '9') { code = code*10 + (p - '0'); have = 1; }
                 else if (p == ';' || (p >= 0x40 && p <= 0x7e)) {
                     if (have || p == 'm') {
-                        if (stage == 2) { newFg = code; stage = 0; }       // 38;5;N
-                        else if (stage == 4) { newBg = code; stage = 0; }  // 48;5;N
+                        if (stage == 2) { newFg = code; stage = 0; }
+                        else if (stage == 4) { newBg = code; stage = 0; }
                         else if (stage == 1) { stage = (code == 5) ? 2 : 0; }
                         else if (stage == 3) { stage = (code == 5) ? 4 : 0; }
                         else if (code == 0) { newFg = -1; newBg = -1; }
@@ -234,169 +186,134 @@ static NSAttributedString *parseFrame(NSData *data) {
             i = j; runStart = i;
         } else i++;
     }
-    if (1) {
-        appendRun(out, b, runStart, i - runStart, curFg, curBg, font);
-    }
+    appendRun(out, b, runStart, i - runStart, curFg, curBg, font);
     if (gLineSpacing > 0 && out.length) {
         NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
-        ps.lineSpacing = gLineSpacing;   // keep text rows in step with gLineH
+        ps.lineSpacing = gLineSpacing;
         [out addAttribute:NSParagraphStyleAttributeName value:ps range:NSMakeRange(0, out.length)];
     }
     return out;
 }
 
-// Tell kryoterm the grid size for a view's pixel size: RS "cols,rows" RS on the
-// keystroke pipe. kryoterm rebuilds its grid + sets the pty size.
-static void sendResize(NSView *v) {
-    if (gMaster < 0 || gCharW < 1 || gLineH < 1) return;
-    int cols = (int)((v.bounds.size.width  - 2 * kPadX) / gCharW);
-    int rows = (int)((v.bounds.size.height - 2 * kPadY) / gLineH);
-    if (cols < 4) cols = 4;
-    if (rows < 2) rows = 2;
-    if (cols == gCols && rows == gRows) return;   // unchanged -> skip (throttles live resize)
-    gCols = cols; gRows = rows;
-    char buf[64];
-    int len = snprintf(buf, sizeof buf, "\036R,%d,%d\036", cols, rows);
-    write(gMaster, buf, len);
-}
-static void sendScrollbackCap(void) {
-    if (gMaster < 0) return;
-    char buf[32]; int n = snprintf(buf, sizeof buf, "\036L,%d\036", gScrollbackLines);
-    write(gMaster, buf, n);
-}
-
+// ---- KryptonView: one pane (its own engine + state) -----------------------
 @interface KryptonView : NSView <NSTextFieldDelegate>
-@property (strong) NSAttributedString *attr;   // the latest frame
+@property (strong) NSAttributedString *attr;
+@property (assign) int master;
+@property (assign) int readFd;
+@property (assign) pid_t child;
+@property (strong) NSTextField *searchField;
+@property (strong) NSTextField *searchCount;
 @end
 
-@implementation KryptonView
+void closePaneView(KryptonView *pane);   // fwd (defined after the class)
+
+@implementation KryptonView {
+    int _curRow, _curCol, _cols, _rows, _scrollOff, _scrollMax;
+    int _selAR, _selAC, _selER, _selEC; BOOL _hasSel;
+    int _matchRow, _matchCol, _matchLen, _matchNum, _matchTotal;
+    int _mouseLevel, _mouseSgr, _cursorShape, _pasteMode, _altActive, _focusMode;
+    int _mousePressBtn, _lastMouseR, _lastMouseC; BOOL _mouseReporting;
+    BOOL _flashOn;
+}
+- (instancetype)initWithFrame:(NSRect)f {
+    self = [super initWithFrame:f];
+    if (self) { _master = -1; _readFd = -1; _child = -1; _cols = 104; _rows = 30;
+                _curRow = 0; _curCol = 0; _scrollMax = 0; _matchRow = -1; _lastMouseR = -1; _lastMouseC = -1; }
+    return self;
+}
 - (BOOL)acceptsFirstResponder { return YES; }
-- (BOOL)isFlipped { return YES; }              // text origin at top-left
-- (void)viewDidEndLiveResize { gHasSel = NO; sendResize(self); }   // reflow at drag end (gridNew would flicker mid-drag)
-- (void)scrollWheel:(NSEvent *)e {                   // wheel -> scrollback
-    if (gMaster < 0 || gLineH < 1) return;
-    static CGFloat acc = 0;
-    acc += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.scrollingDeltaY * gLineH;
-    int lines = (int)(acc / gLineH);
-    if (lines == 0) return;
-    acc -= lines * gLineH;
-    if (gMouseLevel > 0 && !(e.modifierFlags & NSEventModifierFlagShift)) {   // report wheel to the app
-        int r, c; [self pointToCell:e row:&r col:&c];
-        int btn = (lines > 0 ? 64 : 65) + [self mouseModsFor:e];
-        int n = lines > 0 ? lines : -lines;
-        for (int i = 0; i < n && i < 8; i++) [self sendMouseButton:btn row:r col:c press:YES];
-        return;
-    }
-    if (gAltActive && !(e.modifierFlags & NSEventModifierFlagShift)) {        // alt-screen TUI: wheel -> arrow keys
-        const char *arrow = lines > 0 ? "\x1b[A" : "\x1b[B";
-        int n = lines > 0 ? lines : -lines;
-        for (int i = 0; i < n && i < 6; i++) write(gMaster, arrow, 3);
-        return;
-    }
-    char buf[32];
-    if (lines > 0) snprintf(buf, sizeof buf, "\036U,%d\036", lines);    // up into history
-    else           snprintf(buf, sizeof buf, "\036D,%d\036", -lines);   // back toward live
-    write(gMaster, buf, strlen(buf));
-}
+- (BOOL)isFlipped { return YES; }
+- (BOOL)isActivePane { return self.window.isKeyWindow && self.window.firstResponder == self; }
 
-// ---- find-in-scrollback ----
-- (void)sendFind:(NSString *)cmd query:(NSString *)q {
-    if (gMaster < 0) return;
-    NSString *msg = [NSString stringWithFormat:@"\036%@,%@\036", cmd, q ?: @""];
-    const char *b = [msg UTF8String]; write(gMaster, b, strlen(b));
-}
-- (void)openSearch {
-    gSearchField.hidden = NO;
-    gSearchField.stringValue = @"";
-    gSearchCount.hidden = NO;
-    gSearchCount.stringValue = @"";
-    [self.window makeFirstResponder:gSearchField];
-}
-- (void)closeSearch {
-    gSearchField.hidden = YES;
-    gSearchCount.hidden = YES;
-    if (gMaster >= 0) write(gMaster, "\036X,0\036", 5);
-    [self.window makeFirstResponder:self];
-}
-- (void)newWindow {                                    // ⌘N — independent kryoterm
-    if (!gExecPath) return;
-    NSTask *t = [[NSTask alloc] init];
-    t.executableURL = [NSURL fileURLWithPath:gExecPath];
-    t.arguments = gKPath ? @[gKPath] : @[];
-    [t launchAndReturnError:nil];
-}
-- (void)controlTextDidChange:(NSNotification *)n {
-    [self sendFind:@"F" query:gSearchField.stringValue];   // live search, resets to newest match
-}
-- (BOOL)control:(NSControl *)c textView:(NSTextView *)tv doCommandBySelector:(SEL)sel {
-    if (sel == @selector(insertNewline:))   { [self sendFind:@"N" query:gSearchField.stringValue]; return YES; }  // next
-    if (sel == @selector(cancelOperation:)) { [self closeSearch]; return YES; }                                    // Esc
-    return NO;
-}
-
-// ---- mouse selection ----
-- (void)pointToCell:(NSEvent *)e row:(int *)row col:(int *)col {
-    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
-    int c = (int)((p.x - kPadX) / gCharW);
-    int r = (int)((p.y - kPadY) / gLineH);
-    if (c < 0) c = 0;  if (c > gCols) c = gCols;
-    if (r < 0) r = 0;  if (r >= gRows) r = gRows - 1;
-    *row = r; *col = c;
-}
-- (void)selectWordRow:(int)r col:(int)c {
-    NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
-    if (r >= (int)lines.count) { gHasSel = NO; return; }
-    NSString *ln = lines[r]; int L = (int)ln.length;
-    if (L == 0) { gHasSel = NO; return; }
-    if (c >= L) c = L - 1;
-    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
-    int a = c, b = c;
-    while (a > 0 && ![ws characterIsMember:[ln characterAtIndex:a-1]]) a--;
-    while (b < L && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
-    gSelAR = r; gSelAC = a; gSelER = r; gSelEC = b; gHasSel = (b > a);
-}
-- (void)selectLineRow:(int)r {
-    NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
-    int L = (r < (int)lines.count) ? (int)[lines[r] length] : 0;
-    gSelAR = r; gSelAC = 0; gSelER = r; gSelEC = L; gHasSel = (L > 0);
-}
-- (void)openUrlAtRow:(int)r col:(int)c {
-    NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
-    if (r < 0 || r >= (int)lines.count) return;
-    NSString *ln = lines[r]; int L = (int)ln.length;
-    if (c >= L) return;
-    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
-    int a = c, b = c;
-    while (a > 0 && ![ws characterIsMember:[ln characterAtIndex:a-1]]) a--;
-    while (b < L && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
-    NSString *tok = [ln substringWithRange:NSMakeRange(a, b-a)];
-    NSCharacterSet *trail = [NSCharacterSet characterSetWithCharactersInString:@".,;:)]}>\"'"];
-    while (tok.length && [trail characterIsMember:[tok characterAtIndex:tok.length-1]]) tok = [tok substringToIndex:tok.length-1];
-    NSString *url = nil;
-    if ([tok hasPrefix:@"http://"] || [tok hasPrefix:@"https://"] || [tok hasPrefix:@"file://"]) url = tok;
-    else if ([tok hasPrefix:@"www."]) url = [@"https://" stringByAppendingString:tok];
-    if (url) { NSURL *u = [NSURL URLWithString:url]; if (u) [[NSWorkspace sharedWorkspace] openURL:u]; return; }
-    // file path -> open in Finder/default app if it exists
-    if ([tok hasPrefix:@"/"] || [tok hasPrefix:@"~/"]) {
-        NSString *path = [tok stringByExpandingTildeInPath];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:path])
-            [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path]];
+// --- engine + reader ---
+- (void)spawnEngine {
+    int inpipe[2], outpipe[2];
+    if (pipe(inpipe) || pipe(outpipe)) return;
+    pid_t pid = fork();
+    if (pid < 0) return;
+    if (pid == 0) {
+        dup2(inpipe[0], 0); dup2(outpipe[1], 1); dup2(outpipe[1], 2);
+        close(inpipe[0]); close(inpipe[1]); close(outpipe[0]); close(outpipe[1]);
+        execl(gKPath.fileSystemRepresentation, gKPath.fileSystemRepresentation, "-i", (char *)NULL);
+        _exit(127);
     }
+    close(inpipe[0]); close(outpipe[1]);
+    _master = inpipe[1]; _readFd = outpipe[0]; _child = pid;
+    glog("pane %p spawned: child=%d master=%d panes=%lu", self, pid, _master, (unsigned long)gPanes.count);
+    [NSThread detachNewThreadSelector:@selector(readLoop) toTarget:self withObject:nil];
 }
-// ---- mouse reporting (X10 / SGR-1006) for TUIs that enable it ----
+- (void)readLoop {
+    NSMutableData *frame = [NSMutableData data];
+    unsigned char buf[8192]; ssize_t got;
+    int rfd = _readFd;
+    while ((got = read(rfd, buf, sizeof(buf))) > 0) {
+        for (ssize_t i = 0; i < got; i++) {
+            if (buf[i] == 0x0c) {
+                NSData *snap = [frame copy];
+                dispatch_async(dispatch_get_main_queue(), ^{ [self applyFrame:snap]; });
+                [frame setLength:0];
+            } else [frame appendBytes:&buf[i] length:1];
+        }
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{ [self engineExited]; });
+}
+- (void)applyFrame:(NSData *)snap {
+    NSData *body = snap;
+    const unsigned char *p = snap.bytes; NSUInteger len = snap.length;
+    if (len > 0 && p[0] == 1) {
+        NSUInteger k = 1; while (k < len && p[k] != 1) k++;
+        if (k < len) {
+            int fv[16] = {0}; int neg[16] = {0}; int field = 0; NSUInteger ts = 0;
+            for (NSUInteger m = 1; m < k; m++) {
+                if (p[m] == ',') { field++; if (field == 16) { ts = m+1; break; } }
+                else if (field < 16) { if (p[m]=='-') neg[field]=1; else if (p[m]>='0'&&p[m]<='9') fv[field]=fv[field]*10+(p[m]-'0'); }
+            }
+            for (int q = 0; q < 16; q++) if (neg[q]) fv[q] = -fv[q];
+            _curRow=fv[0]; _curCol=fv[1]; _scrollOff=fv[2]; _scrollMax=fv[3];
+            _matchRow=fv[4]; _matchCol=fv[5]; _matchLen=fv[6]; _matchNum=fv[7]; _matchTotal=fv[8];
+            _mouseLevel=fv[10]; _mouseSgr=fv[11]; _cursorShape=fv[12]; _pasteMode=fv[13]; _altActive=fv[14]; _focusMode=fv[15];
+            if (fv[9] == 1) {
+                if (gBellMode == 2) NSBeep();
+                else if (gBellMode == 1) { _flashOn = YES; [self setNeedsDisplay:YES];
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.04*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ _flashOn = NO; [self setNeedsDisplay:YES]; }); }
+            }
+            if (!_searchField.hidden)
+                _searchCount.stringValue = _matchTotal > 0 ? [NSString stringWithFormat:@"%d/%d", _matchNum, _matchTotal] : @"0/0";
+            if (ts && ts < k) {
+                NSString *t = [[NSString alloc] initWithBytes:p+ts length:k-ts encoding:NSUTF8StringEncoding];
+                if (t.length && self.isActivePane) [self.window setTitle:t];
+            }
+            body = [snap subdataWithRange:NSMakeRange(k+1, len-(k+1))];
+        }
+    }
+    self.attr = parseFrame(body);
+    gCursorOn = YES;
+    [self setNeedsDisplay:YES];
+}
+- (void)engineExited { closePaneView(self); }
+- (void)focusIn { if (_focusMode && self.master >= 0) write(self.master, "\033[I", 3); }
+
+// --- size + control markers ---
+- (void)sendResize {
+    if (_master < 0 || gCharW < 1 || gLineH < 1) return;
+    int cols = (int)((self.bounds.size.width - 2*kPadX) / gCharW);
+    int rows = (int)((self.bounds.size.height - 2*kPadY) / gLineH);
+    if (cols < 4) cols = 4;  if (rows < 2) rows = 2;
+    if (cols == _cols && rows == _rows) return;
+    _cols = cols; _rows = rows;
+    char b[64]; int n = snprintf(b, sizeof b, "\036R,%d,%d\036", cols, rows); write(_master, b, n);
+}
+- (void)sendScrollbackCap { if (_master >= 0) { char b[32]; int n = snprintf(b,sizeof b,"\036L,%d\036",gScrollbackLines); write(_master,b,n); } }
+- (void)viewDidEndLiveResize { _hasSel = NO; [self sendResize]; }
+- (void)setFrameSize:(NSSize)s { [super setFrameSize:s]; [self sendResize]; }
+
+// --- mouse encoding (X10 / SGR-1006) ---
 - (void)sendMouseButton:(int)btn row:(int)r col:(int)c press:(BOOL)press {
-    if (gMaster < 0 || r < 0 || c < 0) return;
+    if (_master < 0 || r < 0 || c < 0) return;
     int cx = c + 1, cy = r + 1;
-    if (gMouseSgr) {
-        char buf[48];
-        snprintf(buf, sizeof buf, "\033[<%d;%d;%d%c", btn, cx, cy, press ? 'M' : 'm');
-        write(gMaster, buf, strlen(buf));
-    } else {
-        int eb = press ? btn : 3;                       // X10 release = all-buttons (3)
-        int bx = cx + 32, by = cy + 32; if (bx > 255) bx = 255; if (by > 255) by = 255;
-        unsigned char x10[6] = { 0x1b, '[', 'M', (unsigned char)(eb + 32), (unsigned char)bx, (unsigned char)by };
-        write(gMaster, x10, 6);
-    }
+    if (_mouseSgr) { char b[48]; snprintf(b,sizeof b,"\033[<%d;%d;%d%c",btn,cx,cy,press?'M':'m'); write(_master,b,strlen(b)); }
+    else { int eb = press ? btn : 3; int bx = cx+32, by = cy+32; if (bx>255)bx=255; if (by>255)by=255;
+           unsigned char x[6] = {0x1b,'[','M',(unsigned char)(eb+32),(unsigned char)bx,(unsigned char)by}; write(_master,x,6); }
 }
 - (int)mouseModsFor:(NSEvent *)e {
     int m = 0;
@@ -405,534 +322,467 @@ static void sendScrollbackCap(void) {
     if (e.modifierFlags & NSEventModifierFlagControl) m += 16;
     return m;
 }
-// Report to the app if it's tracking + Shift isn't held (Shift = local selection). Returns YES if reported.
+- (void)pointToCell:(NSEvent *)e row:(int *)row col:(int *)col {
+    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
+    int c = (int)((p.x - kPadX) / gCharW), r = (int)((p.y - kPadY) / gLineH);
+    if (c < 0) c = 0;  if (c > _cols) c = _cols;
+    if (r < 0) r = 0;  if (r >= _rows) r = _rows - 1;
+    *row = r; *col = c;
+}
 - (BOOL)reportMouse:(NSEvent *)e button:(int)base press:(BOOL)press {
-    if (gMouseLevel <= 0 || (e.modifierFlags & NSEventModifierFlagShift)) return NO;
+    if (_mouseLevel <= 0 || (e.modifierFlags & NSEventModifierFlagShift)) return NO;
     int r, c; [self pointToCell:e row:&r col:&c];
-    gMousePressBtn = base + [self mouseModsFor:e];
-    [self sendMouseButton:gMousePressBtn row:r col:c press:press];
-    gLastMouseR = r; gLastMouseC = c;
+    _mousePressBtn = base + [self mouseModsFor:e];
+    [self sendMouseButton:_mousePressBtn row:r col:c press:press];
+    _lastMouseR = r; _lastMouseC = c;
     return YES;
 }
 - (void)mouseDown:(NSEvent *)e {
+    [self.window makeFirstResponder:self];
     int r, c; [self pointToCell:e row:&r col:&c];
-    if (e.modifierFlags & NSEventModifierFlagCommand) { [self openUrlAtRow:r col:c]; return; }  // ⌘-click opens URLs
-    if ([self reportMouse:e button:0 press:YES]) { gMouseReporting = YES; return; }             // app wants the mouse
-    if (e.modifierFlags & NSEventModifierFlagShift) {           // shift-click extends from the anchor
-        gSelER = r; gSelEC = c; gHasSel = (gSelER != gSelAR || gSelEC != gSelAC);
-        [self setNeedsDisplay:YES]; return;
-    }
-    if (e.clickCount == 2)      [self selectWordRow:r col:c];   // word
-    else if (e.clickCount == 3) [self selectLineRow:r];         // line
-    else { gSelAR = r; gSelAC = c; gSelER = r; gSelEC = c; gHasSel = NO; }
+    if (e.modifierFlags & NSEventModifierFlagCommand) { [self openUrlAtRow:r col:c]; return; }
+    if ([self reportMouse:e button:0 press:YES]) { _mouseReporting = YES; return; }
+    if (e.modifierFlags & NSEventModifierFlagShift) { _selER=r; _selEC=c; _hasSel=(_selER!=_selAR||_selEC!=_selAC); [self setNeedsDisplay:YES]; return; }
+    if (e.clickCount == 2)      [self selectWordRow:r col:c];
+    else if (e.clickCount == 3) [self selectLineRow:r];
+    else { _selAR=r; _selAC=c; _selER=r; _selEC=c; _hasSel=NO; }
     [self setNeedsDisplay:YES];
 }
 - (void)mouseDragged:(NSEvent *)e {
-    if (gMouseReporting) {                       // motion reports for 1002/1003
-        if (gMouseLevel >= 2) {
-            int r, c; [self pointToCell:e row:&r col:&c];
-            if (r != gLastMouseR || c != gLastMouseC) {
-                [self sendMouseButton:32 + gMousePressBtn row:r col:c press:YES];
-                gLastMouseR = r; gLastMouseC = c;
-            }
-        }
-        return;
-    }
-    [self pointToCell:e row:&gSelER col:&gSelEC];
-    gHasSel = (gSelER != gSelAR || gSelEC != gSelAC);
-    [self setNeedsDisplay:YES];
+    if (_mouseReporting) { if (_mouseLevel >= 2) { int r,c; [self pointToCell:e row:&r col:&c];
+            if (r!=_lastMouseR||c!=_lastMouseC) { [self sendMouseButton:32+_mousePressBtn row:r col:c press:YES]; _lastMouseR=r; _lastMouseC=c; } } return; }
+    [self pointToCell:e row:&_selER col:&_selEC]; _hasSel=(_selER!=_selAR||_selEC!=_selAC); [self setNeedsDisplay:YES];
 }
 - (void)mouseUp:(NSEvent *)e {
-    if (gMouseReporting) { [self sendMouseButton:gMousePressBtn row:gLastMouseR col:gLastMouseC press:NO]; gMouseReporting = NO; return; }
-    if (gCopyOnSelect && gHasSel) [self copySelection];
+    if (_mouseReporting) { [self sendMouseButton:_mousePressBtn row:_lastMouseR col:_lastMouseC press:NO]; _mouseReporting=NO; return; }
+    if (gCopyOnSelect && _hasSel) [self copySelection];
 }
 - (void)otherMouseDown:(NSEvent *)e {
-    if ([self reportMouse:e button:(e.buttonNumber == 2 ? 1 : 2) press:YES]) { gMouseReporting = YES; return; }
-    if (e.buttonNumber == 2) [self pasteClipboard];   // middle-click paste (when not reporting)
+    [self.window makeFirstResponder:self];
+    if ([self reportMouse:e button:(e.buttonNumber==2?1:2) press:YES]) { _mouseReporting=YES; return; }
+    if (e.buttonNumber == 2) [self pasteClipboard];
 }
-- (void)otherMouseUp:(NSEvent *)e {
-    if (gMouseReporting) { [self sendMouseButton:gMousePressBtn row:gLastMouseR col:gLastMouseC press:NO]; gMouseReporting = NO; }
+- (void)otherMouseUp:(NSEvent *)e { if (_mouseReporting) { [self sendMouseButton:_mousePressBtn row:_lastMouseR col:_lastMouseC press:NO]; _mouseReporting=NO; } }
+- (void)rightMouseDown:(NSEvent *)e { [self.window makeFirstResponder:self]; if ([self reportMouse:e button:2 press:YES]) _mouseReporting=YES; }
+- (void)rightMouseUp:(NSEvent *)e { if (_mouseReporting) { [self sendMouseButton:_mousePressBtn row:_lastMouseR col:_lastMouseC press:NO]; _mouseReporting=NO; } }
+- (void)scrollWheel:(NSEvent *)e {
+    if (_master < 0 || gLineH < 1) return;
+    static CGFloat acc = 0;
+    acc += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.scrollingDeltaY * gLineH;
+    int lines = (int)(acc / gLineH);
+    if (lines == 0) return;
+    acc -= lines * gLineH;
+    if (_mouseLevel > 0 && !(e.modifierFlags & NSEventModifierFlagShift)) {
+        int r,c; [self pointToCell:e row:&r col:&c];
+        int btn = (lines>0?64:65) + [self mouseModsFor:e]; int n = lines>0?lines:-lines;
+        for (int i=0;i<n&&i<8;i++) [self sendMouseButton:btn row:r col:c press:YES]; return;
+    }
+    if (_altActive && !(e.modifierFlags & NSEventModifierFlagShift)) {
+        const char *arrow = lines>0 ? "\x1b[A" : "\x1b[B"; int n = lines>0?lines:-lines;
+        for (int i=0;i<n&&i<6;i++) write(_master, arrow, 3); return;
+    }
+    char b[32];
+    if (lines > 0) snprintf(b,sizeof b,"\036U,%d\036",lines); else snprintf(b,sizeof b,"\036D,%d\036",-lines);
+    write(_master, b, strlen(b));
 }
-- (void)rightMouseDown:(NSEvent *)e {
-    if ([self reportMouse:e button:2 press:YES]) gMouseReporting = YES;
+
+// --- selection / copy / paste / urls ---
+- (void)selectWordRow:(int)r col:(int)c {
+    NSArray<NSString *> *L = [self.attr.string componentsSeparatedByString:@"\n"];
+    if (r >= (int)L.count) { _hasSel = NO; return; }
+    NSString *ln = L[r]; int n = (int)ln.length; if (n==0) { _hasSel=NO; return; } if (c>=n) c=n-1;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet]; int a=c,b=c;
+    while (a>0 && ![ws characterIsMember:[ln characterAtIndex:a-1]]) a--;
+    while (b<n && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
+    _selAR=r; _selAC=a; _selER=r; _selEC=b; _hasSel=(b>a);
 }
-- (void)rightMouseUp:(NSEvent *)e {
-    if (gMouseReporting) { [self sendMouseButton:gMousePressBtn row:gLastMouseR col:gLastMouseC press:NO]; gMouseReporting = NO; }
-}
-// drag-and-drop files -> insert their (shell-quoted) paths
-- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)s { return NSDragOperationCopy; }
-- (BOOL)performDragOperation:(id<NSDraggingInfo>)s {
-    NSArray<NSURL *> *urls = [[s draggingPasteboard] readObjectsForClasses:@[[NSURL class]]
-                                                                   options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
-    if (!urls.count || gMaster < 0) return NO;
-    NSMutableString *out = [NSMutableString string];
-    for (NSURL *u in urls)
-        [out appendFormat:@"'%@' ", [u.path stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
-    const char *b = [out UTF8String]; write(gMaster, b, strlen(b));
-    return YES;
+- (void)selectLineRow:(int)r {
+    NSArray<NSString *> *L = [self.attr.string componentsSeparatedByString:@"\n"];
+    int n = (r<(int)L.count) ? (int)[L[r] length] : 0;
+    _selAR=r; _selAC=0; _selER=r; _selEC=n; _hasSel=(n>0);
 }
 - (NSString *)selectedText {
-    if (!gHasSel || !self.attr) return nil;
-    NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
-    int r1 = gSelAR, c1 = gSelAC, r2 = gSelER, c2 = gSelEC;
-    if (r2 < r1 || (r2 == r1 && c2 < c1)) { int tr=r1,tc=c1; r1=r2;c1=c2;r2=tr;c2=tc; }
-    NSMutableString *out = [NSMutableString string];
-    for (int r = r1; r <= r2 && r < (int)lines.count; r++) {
-        NSString *ln = lines[r]; int L = (int)ln.length;
-        int a = (r==r1)? c1 : 0, b = (r==r2)? c2 : L;
-        if (a > L) a = L;  if (b > L) b = L;  if (b < a) b = a;
-        [out appendString:[ln substringWithRange:NSMakeRange(a, b-a)]];
-        if (r < r2) [out appendString:@"\n"];
+    if (!_hasSel || !self.attr) return nil;
+    NSArray<NSString *> *L = [self.attr.string componentsSeparatedByString:@"\n"];
+    int r1=_selAR,c1=_selAC,r2=_selER,c2=_selEC;
+    if (r2<r1 || (r2==r1&&c2<c1)) { int tr=r1,tc=c1; r1=r2;c1=c2;r2=tr;c2=tc; }
+    NSMutableString *o = [NSMutableString string];
+    for (int r=r1; r<=r2 && r<(int)L.count; r++) {
+        NSString *ln=L[r]; int n=(int)ln.length; int a=(r==r1)?c1:0,b=(r==r2)?c2:n;
+        if (a>n)a=n; if (b>n)b=n; if (b<a)b=a;
+        [o appendString:[ln substringWithRange:NSMakeRange(a,b-a)]];
+        if (r<r2) [o appendString:@"\n"];
     }
-    return out;
+    return o;
 }
-- (void)copySelection {
-    NSString *t = [self selectedText];
-    if (t.length) {
-        NSPasteboard *pb = [NSPasteboard generalPasteboard];
-        [pb clearContents];
-        [pb setString:t forType:NSPasteboardTypeString];
-    }
-}
+- (void)copySelection { NSString *t=[self selectedText]; if (t.length) { NSPasteboard *pb=[NSPasteboard generalPasteboard]; [pb clearContents]; [pb setString:t forType:NSPasteboardTypeString]; } }
 - (void)pasteClipboard {
     NSString *t = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
-    if (t.length && gMaster >= 0) {
-        const char *b = [t UTF8String];
-        if (gPasteMode) write(gMaster, "\033[200~", 6);    // only wrap if the app enabled bracketed paste
-        write(gMaster, b, strlen(b));
-        if (gPasteMode) write(gMaster, "\033[201~", 6);
-    }
+    if (t.length && _master >= 0) { const char *b=[t UTF8String];
+        if (_pasteMode) write(_master,"\033[200~",6); write(_master,b,strlen(b)); if (_pasteMode) write(_master,"\033[201~",6); }
 }
+- (void)openUrlAtRow:(int)r col:(int)c {
+    NSArray<NSString *> *L = [self.attr.string componentsSeparatedByString:@"\n"];
+    if (r<0 || r>=(int)L.count) return;
+    NSString *ln=L[r]; int n=(int)ln.length; if (c>=n) return;
+    NSCharacterSet *ws=[NSCharacterSet whitespaceCharacterSet]; int a=c,b=c;
+    while (a>0 && ![ws characterIsMember:[ln characterAtIndex:a-1]]) a--;
+    while (b<n && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
+    NSString *tok=[ln substringWithRange:NSMakeRange(a,b-a)];
+    NSCharacterSet *trail=[NSCharacterSet characterSetWithCharactersInString:@".,;:)]}>\"'"];
+    while (tok.length && [trail characterIsMember:[tok characterAtIndex:tok.length-1]]) tok=[tok substringToIndex:tok.length-1];
+    NSString *url=nil;
+    if ([tok hasPrefix:@"http://"]||[tok hasPrefix:@"https://"]||[tok hasPrefix:@"file://"]) url=tok;
+    else if ([tok hasPrefix:@"www."]) url=[@"https://" stringByAppendingString:tok];
+    if (url) { NSURL *u=[NSURL URLWithString:url]; if (u) [[NSWorkspace sharedWorkspace] openURL:u]; return; }
+    if ([tok hasPrefix:@"/"]||[tok hasPrefix:@"~/"]) { NSString *path=[tok stringByExpandingTildeInPath];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path]]; }
+}
+
+// --- find search bar ---
+- (void)sendFind:(NSString *)cmd query:(NSString *)q {
+    if (_master < 0) return;
+    NSString *m = [NSString stringWithFormat:@"\036%@,%@\036", cmd, q ?: @""];
+    const char *b = [m UTF8String]; write(_master, b, strlen(b));
+}
+- (void)openSearch { _searchField.hidden=NO; _searchField.stringValue=@""; _searchCount.hidden=NO; _searchCount.stringValue=@""; [self.window makeFirstResponder:_searchField]; }
+- (void)closeSearch { _searchField.hidden=YES; _searchCount.hidden=YES; if (_master>=0) write(_master,"\036X,0\036",5); [self.window makeFirstResponder:self]; }
+- (void)controlTextDidChange:(NSNotification *)n { [self sendFind:@"F" query:_searchField.stringValue]; }
+- (BOOL)control:(NSControl *)c textView:(NSTextView *)tv doCommandBySelector:(SEL)sel {
+    if (sel == @selector(insertNewline:))   { [self sendFind:@"N" query:_searchField.stringValue]; return YES; }
+    if (sel == @selector(cancelOperation:)) { [self closeSearch]; return YES; }
+    return NO;
+}
+
+// --- draw ---
 - (void)drawRect:(NSRect)dirty {
     [[(gCurBg ?: [NSColor blackColor]) colorWithAlphaComponent:gOpacity] set];
     NSRectFill(self.bounds);
     if (self.attr) [self.attr drawAtPoint:NSMakePoint(kPadX, kPadY)];
-    // underline URLs (clickable via ⌘-click)
-    if (self.attr) {
-        NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
-        NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    if (self.attr) {     // underline URLs
+        NSArray<NSString *> *L = [self.attr.string componentsSeparatedByString:@"\n"];
+        NSCharacterSet *ws=[NSCharacterSet whitespaceCharacterSet];
         [[NSColor colorWithCalibratedRed:0.40 green:0.62 blue:0.95 alpha:0.7] set];
-        for (int r = 0; r < (int)lines.count && r < gRows; r++) {
-            NSString *ln = lines[r];
-            NSRange sr = NSMakeRange(0, ln.length);
-            while (sr.length) {
-                NSRange m = [ln rangeOfString:@"http" options:0 range:sr];
-                if (m.location == NSNotFound) break;
-                NSUInteger a = m.location, b = a;
-                while (b < ln.length && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
-                NSString *tok = [ln substringWithRange:NSMakeRange(a, b-a)];
-                if ([tok hasPrefix:@"http://"] || [tok hasPrefix:@"https://"])
-                    NSRectFill(NSMakeRect(kPadX + a*gCharW, kPadY + r*gLineH + gLineH - 1.5, (b-a)*gCharW, 1.0));
-                sr = NSMakeRange(b, ln.length - b);
-            }
+        for (int r=0; r<(int)L.count && r<_rows; r++) {
+            NSString *ln=L[r]; NSRange sr=NSMakeRange(0,ln.length);
+            while (sr.length) { NSRange m=[ln rangeOfString:@"http" options:0 range:sr]; if (m.location==NSNotFound) break;
+                NSUInteger a=m.location,b=a; while (b<ln.length && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
+                NSString *tok=[ln substringWithRange:NSMakeRange(a,b-a)];
+                if ([tok hasPrefix:@"http://"]||[tok hasPrefix:@"https://"]) NSRectFill(NSMakeRect(kPadX+a*gCharW,kPadY+r*gLineH+gLineH-1.5,(b-a)*gCharW,1.0));
+                sr=NSMakeRange(b,ln.length-b); }
         }
     }
-    // cursor: filled (per style, blinks) when focused; hollow outline when not.
-    if (gCurRow < gRows) {
+    if (_curRow < _rows) {   // cursor: active pane filled, else hollow
         NSColor *cc = gCursorColor ?: [NSColor whiteColor];
-        CGFloat x = kPadX + gCurCol * gCharW, y = kPadY + gCurRow * gLineH;
-        if (!self.window.isKeyWindow) {                          // unfocused -> hollow cell
-            [cc set];
-            NSFrameRect(NSMakeRect(x, y, gCharW, gLineH));
-        } else if (gCursorOn) {
-            int style = gCursorShape > 0 ? gCursorShape - 1 : gCursorStyle;   // app DECSCUSR overrides config
-            NSRect r;
-            if (style == 1)      { r = NSMakeRect(x, y, gCharW, gLineH);            // block
-                                   cc = [cc colorWithAlphaComponent:0.45]; }        // (glyph shows through)
-            else if (style == 2) { r = NSMakeRect(x, y + gLineH - 2, gCharW, 2); }  // underline
-            else                 { r = NSMakeRect(x, y, 2.0, gLineH); }             // bar
-            [cc set];
-            NSRectFill(r);
+        CGFloat x=kPadX+_curCol*gCharW, y=kPadY+_curRow*gLineH;
+        if (!self.isActivePane) { [cc set]; NSFrameRect(NSMakeRect(x,y,gCharW,gLineH)); }
+        else if (gCursorOn) {
+            int style = _cursorShape>0 ? _cursorShape-1 : gCursorStyle; NSRect r;
+            if (style==1) { r=NSMakeRect(x,y,gCharW,gLineH); cc=[cc colorWithAlphaComponent:0.45]; }
+            else if (style==2) { r=NSMakeRect(x,y+gLineH-2,gCharW,2); }
+            else { r=NSMakeRect(x,y,2.0,gLineH); }
+            [cc set]; NSRectFill(r);
         }
     }
-    // selection highlight (translucent overlay)
-    if (gHasSel) {
-        int r1=gSelAR,c1=gSelAC,r2=gSelER,c2=gSelEC;
-        if (r2<r1 || (r2==r1 && c2<c1)) { int tr=r1,tc=c1; r1=r2;c1=c2;r2=tr;c2=tc; }
+    if (_hasSel) {
+        int r1=_selAR,c1=_selAC,r2=_selER,c2=_selEC; if (r2<r1||(r2==r1&&c2<c1)){int tr=r1,tc=c1;r1=r2;c1=c2;r2=tr;c2=tc;}
         [[NSColor colorWithCalibratedRed:0.30 green:0.48 blue:0.85 alpha:0.30] set];
-        for (int r = r1; r <= r2; r++) {
-            int a = (r==r1)? c1 : 0, b = (r==r2)? c2 : gCols;
-            NSRectFill(NSMakeRect(kPadX + a*gCharW, kPadY + r*gLineH, (b-a)*gCharW, gLineH));
-        }
+        for (int r=r1;r<=r2;r++){ int a=(r==r1)?c1:0,b=(r==r2)?c2:_cols; NSRectFill(NSMakeRect(kPadX+a*gCharW,kPadY+r*gLineH,(b-a)*gCharW,gLineH)); }
     }
-    // find: faint highlight on every visible occurrence (shim has the query + text)
-    if (!gSearchField.hidden && gSearchField.stringValue.length && self.attr) {
-        NSString *q = gSearchField.stringValue;
-        NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
+    if (!_searchField.hidden && _searchField.stringValue.length && self.attr) {
+        NSString *q=_searchField.stringValue; NSArray<NSString *> *L=[self.attr.string componentsSeparatedByString:@"\n"];
         [[NSColor colorWithCalibratedRed:0.96 green:0.80 blue:0.25 alpha:0.20] set];
-        for (int r = 0; r < (int)lines.count && r < gRows; r++) {
-            NSString *ln = lines[r];
-            NSRange sr = NSMakeRange(0, ln.length);
-            while (sr.length) {
-                NSRange m = [ln rangeOfString:q options:0 range:sr];   // case-sensitive, matches the bridge
-                if (m.location == NSNotFound) break;
-                NSRectFill(NSMakeRect(kPadX + m.location*gCharW, kPadY + r*gLineH, m.length*gCharW, gLineH));
-                NSUInteger nx = m.location + m.length;
-                sr = NSMakeRange(nx, ln.length - nx);
-            }
-        }
+        for (int r=0;r<(int)L.count && r<_rows;r++){ NSString *ln=L[r]; NSRange sr=NSMakeRange(0,ln.length);
+            while (sr.length){ NSRange m=[ln rangeOfString:q options:0 range:sr]; if (m.location==NSNotFound) break;
+                NSRectFill(NSMakeRect(kPadX+m.location*gCharW,kPadY+r*gLineH,m.length*gCharW,gLineH)); NSUInteger nx=m.location+m.length; sr=NSMakeRange(nx,ln.length-nx); } }
     }
-    // current match — bright (position from the bridge)
-    if (gMatchRow >= 0 && gMatchLen > 0) {
-        [[NSColor colorWithCalibratedRed:0.96 green:0.80 blue:0.25 alpha:0.55] set];
-        NSRectFill(NSMakeRect(kPadX + gMatchCol*gCharW, kPadY + gMatchRow*gLineH, gMatchLen*gCharW, gLineH));
+    if (_matchRow >= 0 && _matchLen > 0) { [[NSColor colorWithCalibratedRed:0.96 green:0.80 blue:0.25 alpha:0.55] set];
+        NSRectFill(NSMakeRect(kPadX+_matchCol*gCharW,kPadY+_matchRow*gLineH,_matchLen*gCharW,gLineH)); }
+    if (_scrollOff > 0 && _scrollMax > 0) {
+        CGFloat H=self.bounds.size.height, total=_scrollMax+_rows; CGFloat th=(_rows/total)*H; if (th<24) th=24;
+        CGFloat y=((CGFloat)(_scrollMax-_scrollOff)/total)*H; if (y+th>H) y=H-th; if (y<0) y=0;
+        [[NSColor colorWithCalibratedRed:0.72 green:0.74 blue:0.70 alpha:0.5] set]; NSRectFill(NSMakeRect(self.bounds.size.width-5,y,3,th));
     }
-    // scroll-position thumb on the right edge (only while viewing history)
-    if (gScrollOff > 0 && gScrollMax > 0) {
-        CGFloat H = self.bounds.size.height, total = gScrollMax + gRows;
-        CGFloat thumbH = (gRows / total) * H;
-        if (thumbH < 24) thumbH = 24;
-        CGFloat y = ((CGFloat)(gScrollMax - gScrollOff) / total) * H;
-        if (y + thumbH > H) y = H - thumbH;
-        if (y < 0) y = 0;
-        [[NSColor colorWithCalibratedRed:0.72 green:0.74 blue:0.70 alpha:0.5] set];
-        NSRectFill(NSMakeRect(self.bounds.size.width - 5, y, 3, thumbH));
+    // active-pane accent border (so you can see which pane has focus when split)
+    if (self.isActivePane && gPanes.count > 1) {
+        [[NSColor colorWithCalibratedRed:0.24 green:0.83 blue:0.55 alpha:0.55] set];
+        NSFrameRectWithWidth(self.bounds, 1.5);
     }
-    // visual-bell flash
-    if (gFlashOn) {
-        [[NSColor colorWithCalibratedWhite:0.9 alpha:0.22] set];
-        NSRectFill(self.bounds);
-    }
+    if (_flashOn) { [[NSColor colorWithCalibratedWhite:0.9 alpha:0.22] set]; NSRectFill(self.bounds); }
 }
+
 - (void)keyDown:(NSEvent *)e {
-    if (gMaster < 0) return;
-    if (e.modifierFlags & NSEventModifierFlagCommand) {   // ⌘C copy / ⌘V paste
+    if (_master < 0) return;
+    if (e.modifierFlags & NSEventModifierFlagCommand) {
         NSString *ch = e.charactersIgnoringModifiers;
         if ([ch isEqualToString:@"c"]) { [self copySelection]; return; }
         if ([ch isEqualToString:@"v"]) { [self pasteClipboard]; return; }
-        if ([ch isEqualToString:@"k"]) { write(gMaster, "\036C,0\036", 5); return; }  // clear
-        if ([ch isEqualToString:@"f"]) { [self openSearch]; return; }                  // find
-        if ([ch isEqualToString:@"n"]) { [self newWindow]; return; }                   // new window
-        if ([ch isEqualToString:@"a"]) {                                               // select all visible
-            gSelAR = 0; gSelAC = 0; gSelER = gRows - 1; gSelEC = gCols; gHasSel = YES;
-            [self setNeedsDisplay:YES]; return;
-        }
-        if ([ch isEqualToString:@"g"]) { write(gMaster, "\036N,\036", 4); return; }    // ⌘G  next match
-        if ([ch isEqualToString:@"G"]) { write(gMaster, "\036P,\036", 4); return; }    // ⌘⇧G prev match
-        if ([ch isEqualToString:@"="] || [ch isEqualToString:@"+"]) {                  // zoom in
-            gFontSize += 1; applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
-        }
-        if ([ch isEqualToString:@"-"]) {                                               // zoom out
-            if (gFontSize > 7) gFontSize -= 1; applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
-        }
-        if ([ch isEqualToString:@"0"]) {                                               // reset zoom
-            loadConfig(); applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
-        }
-        // scrollback nav: ⌘↑/⌘↓ page, ⌘Home/⌘End top/bottom
-        int page = gRows > 2 ? gRows - 2 : 1;
-        char nb[24];
-        if (e.keyCode == 126) { snprintf(nb,sizeof nb,"\036U,%d\036",page);  write(gMaster,nb,strlen(nb)); return; }  // ⌘↑
-        if (e.keyCode == 125) { snprintf(nb,sizeof nb,"\036D,%d\036",page);  write(gMaster,nb,strlen(nb)); return; }  // ⌘↓
-        if (e.keyCode == 115) { write(gMaster, "\036U,99999\036", 9); return; }   // ⌘Home -> top of history
-        if (e.keyCode == 119) { write(gMaster, "\036D,99999\036", 9); return; }   // ⌘End  -> back to live
+        if ([ch isEqualToString:@"f"]) { [self openSearch]; return; }
+        if ([ch isEqualToString:@"a"]) { _selAR=0; _selAC=0; _selER=_rows-1; _selEC=_cols; _hasSel=YES; [self setNeedsDisplay:YES]; return; }
+        if ([ch isEqualToString:@"g"]) { write(_master,"\036N,\036",4); return; }
+        if ([ch isEqualToString:@"G"]) { write(_master,"\036P,\036",4); return; }
+        if ([ch isEqualToString:@"="] || [ch isEqualToString:@"+"]) { gFontSize+=1; applyFont(); for (KryptonView *p in gPanes){[p sendResize];[p setNeedsDisplay:YES];} return; }
+        if ([ch isEqualToString:@"-"]) { if (gFontSize>7) gFontSize-=1; applyFont(); for (KryptonView *p in gPanes){[p sendResize];[p setNeedsDisplay:YES];} return; }
+        if ([ch isEqualToString:@"0"]) { loadConfig(); applyFont(); for (KryptonView *p in gPanes){[p sendResize];[p setNeedsDisplay:YES];} return; }
+        int page = _rows>2 ? _rows-2 : 1; char nb[24];
+        if (e.keyCode==126) { snprintf(nb,sizeof nb,"\036U,%d\036",page); write(_master,nb,strlen(nb)); return; }
+        if (e.keyCode==125) { snprintf(nb,sizeof nb,"\036D,%d\036",page); write(_master,nb,strlen(nb)); return; }
+        if (e.keyCode==115) { write(_master,"\036U,99999\036",9); return; }
+        if (e.keyCode==119) { write(_master,"\036D,99999\036",9); return; }
     }
-    if ((e.modifierFlags & NSEventModifierFlagShift) && (e.keyCode == 116 || e.keyCode == 121)) {
-        int page = gRows > 2 ? gRows - 2 : 1; char nb[24];   // ⇧PageUp/PageDown scrollback
-        snprintf(nb, sizeof nb, "\036%c,%d\036", e.keyCode == 116 ? 'U' : 'D', page);
-        write(gMaster, nb, strlen(nb)); return;
+    if ((e.modifierFlags & NSEventModifierFlagShift) && (e.keyCode==116 || e.keyCode==121)) {
+        int page=_rows>2?_rows-2:1; char nb[24]; snprintf(nb,sizeof nb,"\036%c,%d\036",e.keyCode==116?'U':'D',page); write(_master,nb,strlen(nb)); return;
     }
-    // Special keys -> ANSI/VT sequences (arrows for history/completion, etc.).
-    // NSEvent.characters returns private-use function-key codepoints for these,
-    // which the shell can't use, so map by keyCode instead.
     const char *seq = NULL;
     switch (e.keyCode) {
-        case 126: seq = "\x1b[A"; break;   // up    -> history prev
-        case 125: seq = "\x1b[B"; break;   // down  -> history next
-        case 124: seq = "\x1b[C"; break;   // right -> forward / accept autosuggest
-        case 123: seq = "\x1b[D"; break;   // left
-        case 115: seq = "\x1b[H"; break;   // home
-        case 119: seq = "\x1b[F"; break;   // end
-        case 116: seq = "\x1b[5~"; break;  // page up
-        case 121: seq = "\x1b[6~"; break;  // page down
-        case 117: seq = "\x1b[3~"; break;  // forward delete
+        case 126: seq="\x1b[A"; break; case 125: seq="\x1b[B"; break;
+        case 124: seq="\x1b[C"; break; case 123: seq="\x1b[D"; break;
+        case 115: seq="\x1b[H"; break; case 119: seq="\x1b[F"; break;
+        case 116: seq="\x1b[5~"; break; case 121: seq="\x1b[6~"; break; case 117: seq="\x1b[3~"; break;
     }
-    if (seq) { write(gMaster, seq, strlen(seq)); return; }
+    if (seq) { write(_master, seq, strlen(seq)); return; }
     NSString *chars = e.characters;
-    if (chars.length) {
-        const char *bytes = [chars UTF8String];
-        write(gMaster, bytes, strlen(bytes));
-    }
+    if (chars.length) { const char *b=[chars UTF8String]; write(_master, b, strlen(b)); }
+}
+
+// drag-drop files -> quoted paths
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)s { return NSDragOperationCopy; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)s {
+    NSArray<NSURL *> *urls = [[s draggingPasteboard] readObjectsForClasses:@[[NSURL class]] options:@{NSPasteboardURLReadingFileURLsOnlyKey:@YES}];
+    if (!urls.count || _master < 0) return NO;
+    NSMutableString *o=[NSMutableString string];
+    for (NSURL *u in urls) [o appendFormat:@"'%@' ",[u.path stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
+    const char *b=[o UTF8String]; write(_master,b,strlen(b)); return YES;
 }
 @end
 
-static KryptonView *gView;
-
-// Pick titlebar + text-area colours for the current system appearance and apply.
-static void applyColors(void) {
-    BOOL dark = systemIsDark();
-    gCurBg = dark ? gBgDark : gBgLight;
-    if (gWin) {
-        gWin.opaque = (gOpacity >= 0.999);
-        gWin.backgroundColor = [(dark ? gTbDark : gTbLight) colorWithAlphaComponent:gOpacity];
-    }
-    if (gView) [gView setNeedsDisplay:YES];
+// ---- pane / window / split / tab management -------------------------------
+static KryptonView *activePane(void) {
+    NSWindow *w = [NSApp keyWindow]; if (!w) w = [NSApp mainWindow];
+    NSResponder *fr = w.firstResponder;
+    if ([fr isKindOfClass:[KryptonView class]]) return (KryptonView *)fr;
+    // fall back to the first pane found in the window
+    for (KryptonView *p in gPanes) if (p.window == w) return p;
+    return nil;
 }
 
-// (Re)start the blink timer for the current gBlinkMs (0 = steady, no timer).
+// Build a pane: view + its search field overlay + a spawned engine.
+static KryptonView *makePane(NSRect frame) {
+    KryptonView *v = [[KryptonView alloc] initWithFrame:frame];
+    [v setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    [v registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+    NSTextField *sf = [[NSTextField alloc] initWithFrame:NSMakeRect(frame.size.width-230, 4, 220, 24)];
+    sf.delegate = v; sf.hidden = YES; sf.bezeled = YES; sf.font = [NSFont systemFontOfSize:12];
+    [sf.cell setPlaceholderString:@"find in scrollback…"];
+    [sf setAutoresizingMask:(NSViewMinXMargin | NSViewMaxYMargin)];
+    [v addSubview:sf]; v.searchField = sf;
+    NSTextField *sc = [[NSTextField alloc] initWithFrame:NSMakeRect(frame.size.width-230-62, 6, 56, 20)];
+    sc.editable=NO; sc.bezeled=NO; sc.drawsBackground=NO; sc.hidden=YES; sc.alignment=NSTextAlignmentRight;
+    sc.font=[NSFont systemFontOfSize:11]; sc.textColor=[NSColor secondaryLabelColor];
+    [sc setAutoresizingMask:(NSViewMinXMargin | NSViewMaxYMargin)];
+    [v addSubview:sc]; v.searchCount = sc;
+    [gPanes addObject:v];
+    [v spawnEngine];
+    return v;
+}
+
+static void applyWindowChrome(NSWindow *win) {
+    win.titlebarAppearsTransparent = YES;
+    win.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    win.opaque = (gOpacity >= 0.999);
+    win.backgroundColor = [(systemIsDark() ? gTbDark : gTbLight) colorWithAlphaComponent:gOpacity];
+}
+
+static NSWindow *makeWindow(void) {
+    NSRect frame = NSMakeRect(0, 0, 830, 500);
+    NSWindow *win = [[NSWindow alloc] initWithContentRect:frame
+        styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable)
+        backing:NSBackingStoreBuffered defer:NO];
+    [win setTitle:@"kryoterm"];
+    [win setContentMinSize:NSMakeSize(240, 140)];
+    win.tabbingMode = NSWindowTabbingModeAutomatic;
+    win.tabbingIdentifier = @"kryoterm";
+    win.releasedWhenClosed = NO;
+    applyWindowChrome(win);
+    NSView *root = [[NSView alloc] initWithFrame:frame];
+    root.autoresizesSubviews = YES;
+    KryptonView *pane = makePane(root.bounds);
+    [root addSubview:pane];
+    [win setContentView:root];
+    [win setInitialFirstResponder:pane];
+    dispatch_async(dispatch_get_main_queue(), ^{ [win makeFirstResponder:pane]; [pane sendResize]; [pane sendScrollbackCap]; });
+    return win;
+}
+
+// close one pane: kill its engine, drop it; collapse its split; close the window if it was the last pane.
+void closePaneView(KryptonView *pane) {
+    if (![gPanes containsObject:pane]) return;
+    if (pane.child > 0) kill(pane.child, SIGTERM);
+    if (pane.master >= 0) close(pane.master);
+    [gPanes removeObject:pane];
+    NSWindow *win = pane.window;
+    NSView *parent = pane.superview;
+    [pane removeFromSuperview];
+    if ([parent isKindOfClass:[NSSplitView class]]) {
+        NSSplitView *sv = (NSSplitView *)parent;
+        if (sv.subviews.count == 1) {                 // collapse split -> sole sibling
+            NSView *sib = sv.subviews[0];
+            [sib removeFromSuperview];
+            sib.frame = sv.frame; sib.autoresizingMask = sv.autoresizingMask;
+            [sv.superview replaceSubview:sv with:sib];
+        } else { [sv adjustSubviews]; }
+        KryptonView *focus = nil;                      // refocus some pane in the window
+        for (KryptonView *p in gPanes) if (p.window == win) { focus = p; break; }
+        if (focus) { [win makeFirstResponder:focus]; }
+        for (KryptonView *p in gPanes) if (p.window == win) [p sendResize];
+    } else {                                           // sole pane -> close the window
+        BOOL more = NO; for (KryptonView *p in gPanes) if (p.window == win) { more = YES; break; }
+        if (!more) [win close];
+    }
+}
+
+static void splitActive(BOOL vertical, BOOL newAfter) {
+    KryptonView *act = activePane();
+    if (!act) return;
+    NSWindow *w = act.window;
+    NSSplitView *sv = [[NSSplitView alloc] initWithFrame:act.frame];
+    sv.vertical = vertical;            // YES = side-by-side (left/right); NO = stacked (up/down)
+    sv.dividerStyle = NSSplitViewDividerStyleThin;
+    sv.autoresizingMask = act.autoresizingMask;
+    KryptonView *np = makePane(act.bounds);
+    [act.superview replaceSubview:act with:sv];   // sv takes act's exact slot
+    act.autoresizingMask = (NSViewWidthSizable|NSViewHeightSizable);
+    np.autoresizingMask  = (NSViewWidthSizable|NSViewHeightSizable);
+    if (newAfter) { [sv addSubview:act]; [sv addSubview:np]; }
+    else          { [sv addSubview:np]; [sv addSubview:act]; }
+    [sv adjustSubviews];
+    CGFloat half = (vertical ? sv.bounds.size.width : sv.bounds.size.height) / 2;
+    [sv setPosition:half ofDividerAtIndex:0];
+    [w makeFirstResponder:np];
+    dispatch_async(dispatch_get_main_queue(), ^{ for (KryptonView *p in gPanes) if (p.window == w) [p sendResize]; });
+}
+
+// ---- menu controller ------------------------------------------------------
+@interface Controller : NSObject @end
+@implementation Controller
+- (void)newWindow:(id)s   { NSWindow *w = makeWindow(); [w center]; [w makeKeyAndOrderFront:nil]; }
+- (void)newTab:(id)s {
+    NSWindow *w = makeWindow();
+    NSWindow *key = [NSApp keyWindow];
+    if (key) [key addTabbedWindow:w ordered:NSWindowAbove]; else { [w center]; }
+    [w makeKeyAndOrderFront:nil];
+}
+- (void)splitRight:(id)s { splitActive(YES, YES); }
+- (void)splitLeft:(id)s  { splitActive(YES, NO); }
+- (void)splitDown:(id)s  { splitActive(NO, YES); }
+- (void)splitUp:(id)s    { splitActive(NO, NO); }
+- (void)closePane:(id)s  { KryptonView *p = activePane(); if (p) closePaneView(p); }
+- (void)closeWindow:(id)s { [[NSApp keyWindow] performClose:nil]; }
+- (void)closeAll:(id)s   { for (NSWindow *w in [NSApp.windows copy]) [w close]; }
+@end
+
+static Controller *gController;
+
+static void buildMenu(void) {
+    NSMenu *mainMenu = [[NSMenu alloc] init];
+    // App menu
+    NSMenuItem *appItem = [[NSMenuItem alloc] init]; [mainMenu addItem:appItem];
+    NSMenu *appMenu = [[NSMenu alloc] init];
+    [appMenu addItemWithTitle:@"About kryoterm" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    [appMenu addItemWithTitle:@"Quit kryoterm" action:@selector(terminate:) keyEquivalent:@"q"];
+    [appItem setSubmenu:appMenu];
+    // File menu
+    NSMenuItem *fileItem = [[NSMenuItem alloc] init]; [mainMenu addItem:fileItem];
+    NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
+    NSMenuItem *mi;
+    mi=[fileMenu addItemWithTitle:@"New Window" action:@selector(newWindow:) keyEquivalent:@"n"]; mi.target=gController;
+    mi=[fileMenu addItemWithTitle:@"New Tab" action:@selector(newTab:) keyEquivalent:@"t"]; mi.target=gController;
+    [fileMenu addItem:[NSMenuItem separatorItem]];
+    mi=[fileMenu addItemWithTitle:@"Split Right" action:@selector(splitRight:) keyEquivalent:@"d"]; mi.target=gController;
+    mi=[fileMenu addItemWithTitle:@"Split Left" action:@selector(splitLeft:) keyEquivalent:@""]; mi.target=gController;
+    mi=[fileMenu addItemWithTitle:@"Split Down" action:@selector(splitDown:) keyEquivalent:@"d"]; mi.keyEquivalentModifierMask=(NSEventModifierFlagCommand|NSEventModifierFlagShift); mi.target=gController;
+    mi=[fileMenu addItemWithTitle:@"Split Up" action:@selector(splitUp:) keyEquivalent:@""]; mi.target=gController;
+    [fileMenu addItem:[NSMenuItem separatorItem]];
+    mi=[fileMenu addItemWithTitle:@"Close" action:@selector(closePane:) keyEquivalent:@"w"]; mi.target=gController;
+    mi=[fileMenu addItemWithTitle:@"Close Window" action:@selector(closeWindow:) keyEquivalent:@"w"]; mi.keyEquivalentModifierMask=(NSEventModifierFlagCommand|NSEventModifierFlagShift); mi.target=gController;
+    mi=[fileMenu addItemWithTitle:@"Close All Windows" action:@selector(closeAll:) keyEquivalent:@"w"]; mi.keyEquivalentModifierMask=(NSEventModifierFlagCommand|NSEventModifierFlagOption); mi.target=gController;
+    [fileItem setSubmenu:fileMenu];
+    // Window menu (native — gives tab navigation: Show Next/Previous Tab, etc.)
+    NSMenuItem *winItem = [[NSMenuItem alloc] init]; [mainMenu addItem:winItem];
+    NSMenu *winMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+    [winMenu addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
+    [winMenu addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
+    [winItem setSubmenu:winMenu];
+    [NSApp setMainMenu:mainMenu];
+    [NSApp setWindowsMenu:winMenu];
+}
+
+// ---- blink timer (shared) -------------------------------------------------
 static void restartBlink(void) {
-    [gBlink invalidate]; gBlink = nil;
-    gCursorOn = YES;
-    if (gBlinkMs > 0) {
-        gBlink = [NSTimer scheduledTimerWithTimeInterval:gBlinkMs/1000.0 repeats:YES block:^(NSTimer *_t){
-            gCursorOn = !gCursorOn;
-            [gView setNeedsDisplay:YES];
-        }];
-    }
-    if (gView) [gView setNeedsDisplay:YES];
+    [gBlink invalidate]; gBlink = nil; gCursorOn = YES;
+    if (gBlinkMs > 0) gBlink = [NSTimer scheduledTimerWithTimeInterval:gBlinkMs/1000.0 repeats:YES block:^(NSTimer *_t){
+        gCursorOn = !gCursorOn; for (KryptonView *p in gPanes) [p setNeedsDisplay:YES]; }];
+    for (KryptonView *p in gPanes) [p setNeedsDisplay:YES];
 }
-
-@interface Reader : NSObject
-@end
-@implementation Reader
-// Read kryoterm's stdout (pty master). Frames are form-feed (0x0c) delimited;
-// on each \f, render the frame accumulated so far and replace the view.
-- (void)readLoop {
-    NSMutableData *frame = [NSMutableData data];
-    unsigned char buf[8192];
-    ssize_t got;
-    while ((got = read(gReadFd, buf, sizeof(buf))) > 0) {
-        for (ssize_t i = 0; i < got; i++) {
-            if (buf[i] == 0x0c) {                       // form feed -> frame boundary
-                NSData *snapshot = [frame copy];
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    // Strip the SOH-delimited header: SOH "row,col,title" SOH ...
-                    NSData *body = snapshot;
-                    const unsigned char *p = snapshot.bytes;
-                    NSUInteger len = snapshot.length;
-                    if (len > 0 && p[0] == 1) {
-                        NSUInteger k = 1;
-                        while (k < len && p[k] != 1) k++;
-                        if (k < len) {
-                            // header = row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,cshape,paste,alt,focus,title
-                            int fv[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; int neg[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
-                            int field = 0; NSUInteger titleStart = 0;
-                            for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 16) { titleStart = m+1; break; } }
-                                else if (field < 16) {
-                                    if (p[m] == '-') neg[field] = 1;
-                                    else if (p[m] >= '0' && p[m] <= '9') fv[field] = fv[field]*10 + (p[m]-'0');
-                                }
-                            }
-                            for (int q = 0; q < 16; q++) if (neg[q]) fv[q] = -fv[q];
-                            gCurRow = fv[0]; gCurCol = fv[1]; gScrollOff = fv[2]; gScrollMax = fv[3];
-                            gMatchRow = fv[4]; gMatchCol = fv[5]; gMatchLen = fv[6];
-                            gMatchNum = fv[7]; gMatchTotal = fv[8];
-                            gMouseLevel = fv[10]; gMouseSgr = fv[11]; gCursorShape = fv[12]; gPasteMode = fv[13]; gAltActive = fv[14]; gFocusMode = fv[15];
-                            if (fv[9] == 1) {                       // bell
-                                if (gBellMode == 2) NSBeep();
-                                else if (gBellMode == 1) {
-                                    gFlashOn = YES; [gView setNeedsDisplay:YES];
-                                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.04*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                                        gFlashOn = NO; [gView setNeedsDisplay:YES];
-                                    });
-                                }
-                            }
-                            if (!gSearchField.hidden)
-                                gSearchCount.stringValue = gMatchTotal > 0
-                                    ? [NSString stringWithFormat:@"%d/%d", gMatchNum, gMatchTotal] : @"0/0";
-                            if (titleStart && titleStart < k) {
-                                NSString *t = [[NSString alloc] initWithBytes:p+titleStart length:k-titleStart encoding:NSUTF8StringEncoding];
-                                if (t.length) [gWin setTitle:t];
-                            }
-                            body = [snapshot subdataWithRange:NSMakeRange(k+1, len-(k+1))];
-                        }
-                    }
-                    gView.attr = parseFrame(body);
-                    gCursorOn = YES;            // solid right after output/typing
-                    [gView setNeedsDisplay:YES];
-                });
-                [frame setLength:0];
-            } else {
-                [frame appendBytes:&buf[i] length:1];
-            }
-        }
-    }
-    // kryoterm exited -> close the app
-    dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
-}
-@end
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        // Engine path: argv[1] (from gui.sh) else next to this binary (so a
-        // double-clicked .app finds Contents/MacOS/kryoterm, not cwd-relative).
-        const char *kpath;
-        if (argc > 1) kpath = argv[1];
-        else {
-            NSString *here = [[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
-            kpath = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]);
-        }
+        const char *kp0;
+        if (argc > 1) kp0 = argv[1];
+        else { NSString *here=[[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
+               kp0 = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]); }
 
-        // Identify as kryoterm (not the host terminal that launched us) — the
-        // shell inherits this env, so kryofetch & co. report kryoterm. Also pin a
-        // sane TERM (the host may set xterm-ghostty etc. with no local terminfo).
         setenv("TERM_PROGRAM", "kryoterm", 1);
-        setenv("TERM_PROGRAM_VERSION", "1.0", 1);
+        setenv("TERM_PROGRAM_VERSION", "1.1", 1);
         setenv("TERM", "xterm-256color", 1);
-
-        // A Finder-launched .app inherits a minimal PATH (no /opt/homebrew/bin),
-        // so brew tools (kryofetch) + p10k's git/etc. go missing → plain prompt.
-        // Capture the real login-shell PATH and export it for the shell we spawn.
         const char *curPath = getenv("PATH");
-        if (!curPath || !strstr(curPath, "/opt/homebrew") ) {
+        if (!curPath || !strstr(curPath, "/opt/homebrew")) {
             FILE *fp = popen("/bin/zsh -lic 'printf KTPATH=%s\\\\n \"$PATH\"' 2>/dev/null", "r");
-            if (fp) {
-                char line[8192];
-                while (fgets(line, sizeof line, fp)) {
-                    if (strncmp(line, "KTPATH=", 7) == 0) {
-                        line[strcspn(line, "\n")] = 0;
-                        if (strlen(line) > 7) setenv("PATH", line + 7, 1);
-                        break;
-                    }
-                }
-                pclose(fp);
-            }
+            if (fp) { char line[8192];
+                while (fgets(line, sizeof line, fp)) { if (strncmp(line,"KTPATH=",7)==0) { line[strcspn(line,"\n")]=0; if (strlen(line)>7) setenv("PATH",line+7,1); break; } }
+                pclose(fp); }
         }
-
-        // Absolute paths so ⌘N can re-launch another window.
-        NSString *(^abspath)(const char *) = ^NSString *(const char *p) {
-            NSString *s = [NSString stringWithUTF8String:p];
-            return [s hasPrefix:@"/"] ? s : [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:s];
-        };
+        NSString *(^abspath)(const char *) = ^NSString *(const char *p){ NSString *s=[NSString stringWithUTF8String:p];
+            return [s hasPrefix:@"/"] ? s : [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:s]; };
         gExecPath = abspath(argv[0]);
-        gKPath = abspath(kpath);
-        kpath = strdup([gKPath fileSystemRepresentation]);   // absolute: survives the chdir below
-        // Start the shell in $HOME (a Finder-launched .app has cwd "/").
-        const char *home = getenv("HOME");
-        if (home) chdir(home);
+        gKPath = abspath(kp0);
+        const char *home = getenv("HOME"); if (home) chdir(home);
 
-        // Spawn `kryoterm -i` over TWO pipes (not one shared pty): keys go down
-        // inpipe to its stdin, frames come up outpipe from its stdout. Separate
-        // open-file-descriptions = independent O_NONBLOCK — kryoterm can make its
-        // stdin non-blocking without that flag bleeding onto stdout (which would
-        // cause partial/EAGAIN writes that truncate frames). The shell still gets
-        // a real pty from kryoterm itself; these are just byte conduits.
-        int inpipe[2], outpipe[2];
-        if (pipe(inpipe) || pipe(outpipe)) { perror("pipe"); return 1; }
-        gChild = fork();
-        if (gChild < 0) { perror("fork"); return 1; }
-        if (gChild == 0) {
-            dup2(inpipe[0], 0);
-            dup2(outpipe[1], 1);
-            dup2(outpipe[1], 2);
-            close(inpipe[0]); close(inpipe[1]); close(outpipe[0]); close(outpipe[1]);
-            execl(kpath, kpath, "-i", (char *)NULL);
-            _exit(127);
-        }
-        close(inpipe[0]); close(outpipe[1]);
-        gMaster = inpipe[1];        // write keystrokes here -> kryoterm stdin
-        gReadFd = outpipe[0];       // read frames here <- kryoterm stdout
+        gPanes = [NSMutableArray array];
+        gController = [[Controller alloc] init];
 
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-
-        // Minimal menu bar so the app shows its name + ⌘Q quits. (Copy/paste/
-        // select-all stay on the view's keyDown path — adding them here with key
-        // equivalents would hijack ⌘C/⌘V/⌘A before keyDown sees them.)
-        NSMenu *mainMenu = [[NSMenu alloc] init];
-        NSMenuItem *appItem = [[NSMenuItem alloc] init];
-        [mainMenu addItem:appItem];
-        NSMenu *appMenu = [[NSMenu alloc] init];
-        [appMenu addItemWithTitle:@"About kryoterm" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
-        [appMenu addItem:[NSMenuItem separatorItem]];
-        [appMenu addItemWithTitle:@"Quit kryoterm" action:@selector(terminate:) keyEquivalent:@"q"];
-        [appItem setSubmenu:appMenu];
-        [NSApp setMainMenu:mainMenu];
-
         loadConfig();
-        applyFont();   // resolve the configured font + cache cell metrics
+        applyFont();
+        buildMenu();
 
-        NSRect frame = NSMakeRect(0, 0, 830, 500);   // ~104x30 at Menlo 13
-        NSWindow *win = [[NSWindow alloc]
-            initWithContentRect:frame
-                      styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
-                        backing:NSBackingStoreBuffered defer:NO];
-        [win setTitle:@"kryoterm — pure-Krypton terminal"];
-        [win setContentMinSize:NSMakeSize(240, 140)];   // no uselessly tiny window
-        gWin = win;
-        // Dark-styled titlebar (light text, correct traffic lights) tinted by our
-        // configured colour; the title bar takes the window background colour.
-        win.titlebarAppearsTransparent = YES;
-        win.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
-        applyColors();
-        // Live-update when the user toggles light/dark mode.
-        [[NSDistributedNotificationCenter defaultCenter]
-            addObserverForName:@"AppleInterfaceThemeChangedNotification" object:nil
-                         queue:[NSOperationQueue mainQueue]
-                    usingBlock:^(NSNotification *_n){ applyColors(); }];
-
-        gView = [[KryptonView alloc] initWithFrame:frame];
-        [gView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-        [gView registerForDraggedTypes:@[NSPasteboardTypeFileURL]];   // drag files -> paths
-        [win setContentView:gView];
-
-        // ⌘F search bar — top-right, hidden until opened, sticks to the corner.
-        gSearchField = [[NSTextField alloc] initWithFrame:NSMakeRect(frame.size.width-230, 4, 220, 24)];
-        gSearchField.delegate = gView;
-        gSearchField.hidden = YES;
-        gSearchField.bezeled = YES;
-        gSearchField.font = [NSFont systemFontOfSize:12];
-        [gSearchField.cell setPlaceholderString:@"find in scrollback…"];
-        [gSearchField setAutoresizingMask:(NSViewMinXMargin | NSViewMaxYMargin)];
-        [gView addSubview:gSearchField];
-
-        gSearchCount = [[NSTextField alloc] initWithFrame:NSMakeRect(frame.size.width-230-62, 6, 56, 20)];
-        gSearchCount.editable = NO; gSearchCount.bezeled = NO; gSearchCount.drawsBackground = NO;
-        gSearchCount.hidden = YES;
-        gSearchCount.alignment = NSTextAlignmentRight;
-        gSearchCount.font = [NSFont systemFontOfSize:11];
-        gSearchCount.textColor = [NSColor secondaryLabelColor];
-        [gSearchCount setAutoresizingMask:(NSViewMinXMargin | NSViewMaxYMargin)];
-        [gView addSubview:gSearchCount];
-        [win setInitialFirstResponder:gView];
-        if (![win setFrameUsingName:@"kryotermMain"]) [win center];   // restore last frame, else centre
-        [win setFrameAutosaveName:@"kryotermMain"];                   // persist size+position
-        [win makeKeyAndOrderFront:nil];
-        [win orderFrontRegardless];
+        NSWindow *win = makeWindow();
+        [win center]; [win makeKeyAndOrderFront:nil]; [win orderFrontRegardless];
         [NSApp activateIgnoringOtherApps:YES];
-        glog("started: gMaster=%d child=%d isKey=%d frIsView=%d", gMaster, gChild,
-             (int)[win isKeyWindow], (int)([win firstResponder] == gView));
+        dispatch_async(dispatch_get_main_queue(), ^{ [NSApp activateIgnoringOtherApps:YES]; [win makeKeyAndOrderFront:nil]; });
 
-        // Re-assert activation + key window AFTER the run loop is up — a bundle-
-        // less CLI binary often can't take key focus until then.
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [NSApp activateIgnoringOtherApps:YES];
-            [win makeKeyAndOrderFront:nil];
-            [win makeFirstResponder:gView];
-            sendResize(gView);   // sync kryoterm's grid to the actual window size
-            sendScrollbackCap();
-            glog("post-runloop: isKey=%d frIsView=%d", (int)[win isKeyWindow],
-                 (int)([win firstResponder] == gView));
-        });
+        // live light/dark switch
+        [[NSDistributedNotificationCenter defaultCenter] addObserverForName:@"AppleInterfaceThemeChangedNotification" object:nil
+            queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *_n){
+                gCurBg = systemIsDark() ? gBgDark : gBgLight;
+                for (NSWindow *w in NSApp.windows) applyWindowChrome(w);
+                for (KryptonView *p in gPanes) [p setNeedsDisplay:YES]; }];
+        // hot-reload config on focus
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidBecomeKeyNotification object:nil
+            queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n){
+                loadConfig(); applyFont();
+                for (NSWindow *w in NSApp.windows) applyWindowChrome(w);
+                restartBlink();
+                KryptonView *p = activePane(); if (p) { [p sendResize]; [p sendScrollbackCap]; [p focusIn]; } }];
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidResignKeyNotification object:nil
+            queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n){
+                for (KryptonView *p in gPanes) [p setNeedsDisplay:YES]; }];
 
-        restartBlink();   // cursor blink from config (cursor_blink_ms; 0 = steady)
-
-        // Hot-reload config whenever the window regains focus.
-        [[NSNotificationCenter defaultCenter]
-            addObserverForName:NSWindowDidBecomeKeyNotification object:win
-                         queue:[NSOperationQueue mainQueue]
-                    usingBlock:^(NSNotification *_n){
-                        loadConfig(); applyFont(); applyColors(); restartBlink(); sendResize(gView); sendScrollbackCap();
-                        if (gFocusMode && gMaster >= 0) write(gMaster, "\033[I", 3);   // focus in
-                    }];
-        // Focus-out: notify focus-reporting apps.
-        [[NSNotificationCenter defaultCenter]
-            addObserverForName:NSWindowDidResignKeyNotification object:win queue:[NSOperationQueue mainQueue]
-                    usingBlock:^(NSNotification *_n){
-                        if (gFocusMode && gMaster >= 0) write(gMaster, "\033[O", 3);   // focus out
-                        [gView setNeedsDisplay:YES];   // redraw cursor as hollow
-                    }];
-
-        // ⌘Q / terminate: doesn't return from [NSApp run], so reap the child here.
-        [[NSNotificationCenter defaultCenter]
-            addObserverForName:NSApplicationWillTerminateNotification object:nil queue:nil
-                    usingBlock:^(NSNotification *_n){ if (gChild > 0) kill(gChild, SIGTERM); }];
-
-        Reader *r = [[Reader alloc] init];
-        [NSThread detachNewThreadSelector:@selector(readLoop) toTarget:r withObject:nil];
-
+        restartBlink();
         [NSApp run];
-        if (gChild > 0) kill(gChild, SIGTERM);
+        for (KryptonView *p in gPanes) if (p.child > 0) kill(p.child, SIGTERM);
     }
     return 0;
 }
