@@ -58,6 +58,7 @@ static int gCursorStyle = 0;             // 0 bar | 1 block | 2 underline
 static NSString *gFontName = @"JetBrainsMono Nerd Font Mono";
 static CGFloat gFontSize = 13;
 static CGFloat gOpacity = 1.0;           // window background opacity (text stays opaque)
+static BOOL gCopyOnSelect = NO;          // auto-copy a selection on mouse-up
 
 static NSColor *hexColor(const char *h, NSColor *fallback) {
     while (*h == '#' || *h == ' ' || *h == '\t') h++;
@@ -76,7 +77,7 @@ static void loadConfig(void) {
     gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
     gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
     gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;  gOpacity = 1.0;
-    kPadX = 6;  kPadY = 4;
+    kPadX = 6;  kPadY = 4;  gCopyOnSelect = NO;
     NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -102,7 +103,8 @@ static void loadConfig(void) {
            "\n"
            "# Window background opacity (0.2-1.0; text stays opaque).\n"
            "opacity          = 1.0\n"
-           "padding          = 6\n";
+           "padding          = 6\n"
+           "copy_on_select   = false        # auto-copy selection; middle-click pastes\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -122,6 +124,7 @@ static void loadConfig(void) {
         if ([k isEqualToString:@"font_size"])   { CGFloat fs = atof(v.UTF8String); if (fs >= 6) gFontSize = fs; continue; }
         if ([k isEqualToString:@"opacity"])     { CGFloat o = atof(v.UTF8String); if (o >= 0.2 && o <= 1.0) gOpacity = o; continue; }
         if ([k isEqualToString:@"padding"])     { CGFloat pd = atof(v.UTF8String); if (pd >= 0 && pd <= 40) { kPadX = pd; kPadY = pd; } continue; }
+        if ([k isEqualToString:@"copy_on_select"]) { gCopyOnSelect = ([v hasPrefix:@"t"] || [v hasPrefix:@"1"] || [v hasPrefix:@"y"]); continue; }
         NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
         if      ([k isEqualToString:@"cursor_color"])     gCursorColor = c;
@@ -286,6 +289,12 @@ static void sendResize(NSView *v) {
     [self pointToCell:e row:&gSelER col:&gSelEC];
     gHasSel = (gSelER != gSelAR || gSelEC != gSelAC);
     [self setNeedsDisplay:YES];
+}
+- (void)mouseUp:(NSEvent *)e {
+    if (gCopyOnSelect && gHasSel) [self copySelection];
+}
+- (void)otherMouseDown:(NSEvent *)e {       // middle-click pastes
+    if (e.buttonNumber == 2) [self pasteClipboard];
 }
 - (NSString *)selectedText {
     if (!gHasSel || !self.attr) return nil;
