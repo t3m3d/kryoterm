@@ -678,7 +678,14 @@ static void restartBlink(void) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        const char *kpath = (argc > 1) ? argv[1] : "./kryoterm";
+        // Engine path: argv[1] (from gui.sh) else next to this binary (so a
+        // double-clicked .app finds Contents/MacOS/kryoterm, not cwd-relative).
+        const char *kpath;
+        if (argc > 1) kpath = argv[1];
+        else {
+            NSString *here = [[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
+            kpath = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]);
+        }
 
         // Identify as kryoterm (not the host terminal that launched us) — the
         // shell inherits this env, so kryofetch & co. report kryoterm. Also pin a
@@ -694,6 +701,10 @@ int main(int argc, const char *argv[]) {
         };
         gExecPath = abspath(argv[0]);
         gKPath = abspath(kpath);
+        kpath = strdup([gKPath fileSystemRepresentation]);   // absolute: survives the chdir below
+        // Start the shell in $HOME (a Finder-launched .app has cwd "/").
+        const char *home = getenv("HOME");
+        if (home) chdir(home);
 
         // Spawn `kryoterm -i` over TWO pipes (not one shared pty): keys go down
         // inpipe to its stdin, frames come up outpipe from its stdout. Separate
