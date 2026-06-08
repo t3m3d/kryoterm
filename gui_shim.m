@@ -245,6 +245,7 @@ static void sendResize(NSView *v) {
     int rows = (int)((v.bounds.size.height - 2 * kPadY) / gLineH);
     if (cols < 4) cols = 4;
     if (rows < 2) rows = 2;
+    if (cols == gCols && rows == gRows) return;   // unchanged -> skip (throttles live resize)
     gCols = cols; gRows = rows;
     char buf[64];
     int len = snprintf(buf, sizeof buf, "\036R,%d,%d\036", cols, rows);
@@ -263,7 +264,8 @@ static void sendScrollbackCap(void) {
 @implementation KryptonView
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)isFlipped { return YES; }              // text origin at top-left
-- (void)viewDidEndLiveResize { gHasSel = NO; sendResize(self); }   // reflow; stale selection gone
+- (void)setFrameSize:(NSSize)s { [super setFrameSize:s]; sendResize(self); }   // reflow live (guarded)
+- (void)viewDidEndLiveResize { gHasSel = NO; sendResize(self); }               // final reflow; clear selection
 - (void)scrollWheel:(NSEvent *)e {                   // wheel -> scrollback
     if (gMaster < 0 || gLineH < 1) return;
     static CGFloat acc = 0;
