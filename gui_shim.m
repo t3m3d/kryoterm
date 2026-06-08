@@ -415,6 +415,13 @@ static void sendResize(NSView *v) {
         if ([ch isEqualToString:@"0"]) {                                               // reset zoom
             loadConfig(); applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
         }
+        // scrollback nav: ⌘↑/⌘↓ page, ⌘Home/⌘End top/bottom
+        int page = gRows > 2 ? gRows - 2 : 1;
+        char nb[24];
+        if (e.keyCode == 126) { snprintf(nb,sizeof nb,"\036U,%d\036",page);  write(gMaster,nb,strlen(nb)); return; }  // ⌘↑
+        if (e.keyCode == 125) { snprintf(nb,sizeof nb,"\036D,%d\036",page);  write(gMaster,nb,strlen(nb)); return; }  // ⌘↓
+        if (e.keyCode == 115) { write(gMaster, "\036U,99999\036", 9); return; }   // ⌘Home -> top of history
+        if (e.keyCode == 119) { write(gMaster, "\036D,99999\036", 9); return; }   // ⌘End  -> back to live
     }
     // Special keys -> ANSI/VT sequences (arrows for history/completion, etc.).
     // NSEvent.characters returns private-use function-key codepoints for these,
