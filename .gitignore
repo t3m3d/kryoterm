@@ -12,3 +12,6 @@ kryoterm
 kryoterm.app/
 /make_icon
 .DS_Store
+/releases/
+/kryoterm
+/kryoterm-gui
