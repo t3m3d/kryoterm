@@ -9,7 +9,9 @@ thing the Krypton backend can't do yet (no `objc_msgSend` FFI). The shim does
 
 **Status: working macOS terminal.** Live `/bin/zsh` (sources your `~/.zshrc` —
 powerlevel10k, history, aliases), full colour incl. truecolor, scrollback,
-selection/copy, find, resize reflow, configurable theme/font/cursor.
+selection/copy, find, resize reflow, configurable theme/font/cursor. Typing
+`exit` (or any shell EOF) closes the window — the bridge reaps the shell via the
+native `waitChild` builtin and shuts down.
 
 ```
  keyboard ─▶ Obj-C shim ─(pipe)▶ kryoterm -i ─(pty)▶ /bin/zsh
@@ -55,10 +57,10 @@ macho backend gains `objc_msgSend`/AppKit FFI.
 
 | Key | Action |
 |---|---|
-| ⌘C / ⌘V | copy selection / bracketed paste |
+| ⌘C / ⌘V / ⌘A | copy selection / bracketed paste / select all |
 | ⌘F · ⌘G · ⌘⇧G | find in scrollback · next · prev |
 | ⌘K | clear screen + scrollback |
-| ⌘N | new window |
+| ⌘N / ⌘Q | new window / quit |
 | ⌘+ / ⌘− / ⌘0 | font zoom in / out / reset |
 | ⌘↑ / ⌘↓ | scrollback page up / down |
 | ⌘Home / ⌘End | scrollback top / back to live |
