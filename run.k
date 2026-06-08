@@ -83,34 +83,58 @@ func kryoterm_interactive(shellPath, cols, rows) {
     let quiet = 0
     let pending = ""                      // partial escape/UTF-8 carried between reads
     let title = ""                        // window title (OSC 0/2 from the shell)
+    let scrollback = ""                   // history lines that scrolled off the top
+    let scrollOff = 0                     // view offset (lines up from the bottom; 0=live)
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
         if len(keys) > 0 {
-            // Resize control: the shim sends RS(0x1e) "cols,rows" RS(0x1e) on
-            // window resize. Strip it, rebuild the grid at the new size, and tell
-            // the pty (SIGWINCH -> shell repaints). Other bytes go to the shell.
+            // Control markers from the shim: RS(0x1e) "<cmd>,<args>" RS(0x1e).
+            //   R,cols,rows = resize   U,n = scroll up n   D,n = scroll down n
+            // Stripped from the keystroke stream; everything else goes to the shell.
             let rs = fromCharCode(30)
             let mi = indexOf(keys, rs)
             if mi >= 0 {
                 let rest = substring(keys, mi + 1, len(keys))
                 let mj = indexOf(rest, rs)
                 if mj >= 0 {
-                    let dims = substring(rest, 0, mj)
-                    let comma = indexOf(dims, ",")
-                    if comma > 0 {
-                        let nc = toInt(substring(dims, 0, comma))
-                        let nr = toInt(substring(dims, comma + 1, len(dims)))
-                        if nc >= 4 && nr >= 2 && (nc != cols || nr != rows) {
-                            cols = nc  rows = nr
-                            st = gridNew(cols, rows)
-                            ptySetSize(m, rows, cols)
+                    let payload = substring(rest, 0, mj)
+                    let c0 = indexOf(payload, ",")
+                    if c0 > 0 {
+                        let cmd = substring(payload, 0, c0)
+                        let args = substring(payload, c0 + 1, len(payload))
+                        if cmd == "R" {
+                            let c1 = indexOf(args, ",")
+                            if c1 > 0 {
+                                let nc = toInt(substring(args, 0, c1))
+                                let nr = toInt(substring(args, c1 + 1, len(args)))
+                                if nc >= 4 && nr >= 2 && (nc != cols || nr != rows) {
+                                    cols = nc  rows = nr
+                                    st = gridNew(cols, rows)
+                                    ptySetSize(m, rows, cols)
+                                    scrollback = ""  scrollOff = 0
+                                }
+                            }
+                        }
+                        if cmd == "U" {
+                            scrollOff = scrollOff + toInt(args)
+                            let mx = lineCount(scrollback)
+                            if scrollOff > mx { scrollOff = mx }
+                            dirty = 1  quiet = 2
+                        }
+                        if cmd == "D" {
+                            scrollOff = scrollOff - toInt(args)
+                            if scrollOff < 0 { scrollOff = 0 }
+                            dirty = 1  quiet = 2
                         }
                     }
                     keys = substring(keys, 0, mi) + substring(rest, mj + 1, len(rest))
                 }
             }
-            if len(keys) > 0 { fdWrite(m, keys, len(keys)) }
+            if len(keys) > 0 {
+                scrollOff = 0                 // a real keystroke jumps to the bottom
+                fdWrite(m, keys, len(keys))
+            }
         }
         let out = fdRead(m, 65536)
         if len(out) > 0 {
@@ -120,7 +144,26 @@ func kryoterm_interactive(shellPath, cols, rows) {
             let chunk = pending + out
             title = oscTitle(chunk, title)
             let cut = gridSafeLen(chunk)
-            if cut > 0 { st = gridFeed(st, substring(chunk, 0, cut), cols, rows) }
+            if cut > 0 {
+                st = gridFeed(st, substring(chunk, 0, cut), cols, rows)
+                let sc = gridScrolled(st, cols, rows)          // rows that scrolled off
+                if len(sc) > 0 {
+                    scrollback = scrollback + sc
+                    if scrollOff > 0 { scrollOff = scrollOff + lineCount(sc) }  // keep view put
+                    let lc = lineCount(scrollback)
+                    if lc > 2500 {                              // trim history to ~2000 lines
+                        let drop = lc - 2000
+                        let p = 0
+                        let seen = 0
+                        while seen < drop && p < len(scrollback) {
+                            if charCode(substring(scrollback, p, p + 1)) == 10 { seen = seen + 1 }
+                            p = p + 1
+                        }
+                        scrollback = substring(scrollback, p, len(scrollback))
+                        if scrollOff > 2000 { scrollOff = 2000 }
+                    }
+                }
+            }
             pending = substring(chunk, cut, len(chunk))
             dirty = 1
             quiet = 0
@@ -136,7 +179,13 @@ func kryoterm_interactive(shellPath, cols, rows) {
             // frame = SOH cursor("row,col") SOH grid-text \f. The shim strips the
             // SOH-delimited cursor header and draws a cursor there.
             let soh = fromCharCode(1)
-            let frame = soh + gridCursor(st, cols, rows) + "," + title + soh + gridRender(st, cols, rows) + ff
+            let cur = gridCursor(st, cols, rows)
+            let body = gridRender(st, cols, rows)
+            if scrollOff > 0 {                 // viewing history: window the buffer, hide cursor
+                cur = "9999,0"
+                body = gridScrollView(scrollback, body, rows, scrollOff)
+            }
+            let frame = soh + cur + "," + title + soh + body + ff
             // write() to a pty can be PARTIAL (small kernel buffer); loop or the
             // frame (and its terminating \f) gets truncated and the shim never
             // sees a complete frame.

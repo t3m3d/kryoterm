@@ -215,7 +215,7 @@ static void sendResize(NSView *v) {
     if (rows < 2) rows = 2;
     gCols = cols; gRows = rows;
     char buf[64];
-    int len = snprintf(buf, sizeof buf, "\x1e%d,%d\x1e", cols, rows);
+    int len = snprintf(buf, sizeof buf, "\x1eR,%d,%d\x1e", cols, rows);
     write(gMaster, buf, len);
 }
 
@@ -227,6 +227,18 @@ static void sendResize(NSView *v) {
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)isFlipped { return YES; }              // text origin at top-left
 - (void)viewDidEndLiveResize { sendResize(self); }   // reflow grid when drag ends
+- (void)scrollWheel:(NSEvent *)e {                   // wheel -> scrollback
+    if (gMaster < 0 || gLineH < 1) return;
+    static CGFloat acc = 0;
+    acc += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.scrollingDeltaY * gLineH;
+    int lines = (int)(acc / gLineH);
+    if (lines == 0) return;
+    acc -= lines * gLineH;
+    char buf[32];
+    if (lines > 0) snprintf(buf, sizeof buf, "\x1eU,%d\x1e", lines);    // up into history
+    else           snprintf(buf, sizeof buf, "\x1eD,%d\x1e", -lines);   // back toward live
+    write(gMaster, buf, strlen(buf));
+}
 
 // ---- mouse selection ----
 - (void)pointToCell:(NSEvent *)e row:(int *)row col:(int *)col {

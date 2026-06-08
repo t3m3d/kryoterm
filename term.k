@@ -217,7 +217,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0"
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0" + fromCharCode(1)
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -230,7 +230,9 @@ func gridFeed(state, s, cols, rows) {
     let grid = substring(state, 0, g5)
     let attr = substring(state, g5, g5 + total)
     let battr = substring(state, g5 + total, g5 + 2 * total)
-    let tail = substring(state, g5 + 2 * total + 1, len(state))
+    let tailFull = substring(state, g5 + 2 * total + 1, len(state))
+    let sohp = indexOf(tailFull, fromCharCode(1))
+    let tail = substring(tailFull, 0, sohp)
     let cr = _cf(tail, 0)
     let cc = _cf(tail, 1)
     let pen = _cf(tail, 2)
@@ -238,6 +240,7 @@ func gridFeed(state, s, cols, rows) {
     let scc = _cf(tail, 4)               // saved cursor col
     let spen = _cf(tail, 5)              // saved colour pen
     let pw = _cf(tail, 6)                // pending wrap (deferred auto-margin)
+    let scrolled = ""                    // rows scrolled off THIS feed (reset each call)
     let n = len(s)
     let i = 0
 
@@ -321,6 +324,7 @@ func gridFeed(state, s, cols, rows) {
             if c == 10 {                                                         // LF → newline
                 cr = cr + 1  cc = 0  pw = 0
                 if cr >= rows {
+                    scrolled = scrolled + _renderRow(grid, attr, battr, 0, cols) + fromCharCode(10)
                     grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
                     attr = _scrollUp(attr, cols, total, _fill1(cols))
                     battr = _scrollUp(battr, cols, total, _fill1(cols))
@@ -344,6 +348,7 @@ func gridFeed(state, s, cols, rows) {
                                 if pw == 1 {                                     // deferred wrap from last col
                                     cc = 0  cr = cr + 1  pw = 0
                                     if cr >= rows {
+                                        scrolled = scrolled + _renderRow(grid, attr, battr, 0, cols) + fromCharCode(10)
                                         grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
                                         attr = _scrollUp(attr, cols, total, _fill1(cols))
                                         battr = _scrollUp(battr, cols, total, _fill1(cols))
@@ -366,7 +371,39 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + fromCharCode(1) + scrolled
+}
+
+// _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
+// rendered to text: trailing blanks trimmed, fg+bg re-emitted, no trailing \n.
+func _renderRow(grid, attr, battr, base, cols) {
+    let e = cols
+    let trimming = 1
+    while e > 0 && trimming == 1 {
+        let off = (base + e - 1) * 5
+        let w = charCode(substring(grid, off, off + 1))
+        if w == 1 && substring(grid, off + 1, off + 2) == " " { e = e - 1 }
+        else { trimming = 0 }
+    }
+    let out = sbNew()
+    let lastFg = 1
+    let lastBg = 1
+    let col = 0
+    while col < e {
+        let cellFg = charCode(substring(attr, base + col, base + col + 1))
+        let cellBg = charCode(substring(battr, base + col, base + col + 1))
+        if cellFg != lastFg || cellBg != lastBg {
+            out = sbAppend(out, _sgrPair(cellFg, cellBg))
+            lastFg = cellFg
+            lastBg = cellBg
+        }
+        let off = (base + col) * 5
+        let w = charCode(substring(grid, off, off + 1))
+        out = sbAppend(out, substring(grid, off + 1, off + 1 + w))
+        col = col + 1
+    }
+    if lastFg != 1 || lastBg != 1 { out = sbAppend(out, fromCharCode(27) + "[0m") }
+    emit sbToString(out)
 }
 
 // gridRender(state, cols, rows) — render the packed state to text (rows joined
@@ -377,36 +414,10 @@ func gridRender(state, cols, rows) {
     let grid = substring(state, 0, g5)
     let attr = substring(state, g5, g5 + total)
     let battr = substring(state, g5 + total, g5 + 2 * total)
-
     let out = sbNew()
     let r = 0
     while r < rows {
-        let base = r * cols
-        let e = cols
-        let trimming = 1
-        while e > 0 && trimming == 1 {
-            let off = (base + e - 1) * 5
-            let w = charCode(substring(grid, off, off + 1))
-            if w == 1 && substring(grid, off + 1, off + 2) == " " { e = e - 1 }
-            else { trimming = 0 }
-        }
-        let lastFg = 1
-        let lastBg = 1
-        let col = 0
-        while col < e {
-            let cellFg = charCode(substring(attr, base + col, base + col + 1))
-            let cellBg = charCode(substring(battr, base + col, base + col + 1))
-            if cellFg != lastFg || cellBg != lastBg {
-                out = sbAppend(out, _sgrPair(cellFg, cellBg))
-                lastFg = cellFg
-                lastBg = cellBg
-            }
-            let off = (base + col) * 5
-            let w = charCode(substring(grid, off, off + 1))
-            out = sbAppend(out, substring(grid, off + 1, off + 1 + w))
-            col = col + 1
-        }
-        if lastFg != 1 || lastBg != 1 { out = sbAppend(out, fromCharCode(27) + "[0m") }
+        out = sbAppend(out, _renderRow(grid, attr, battr, r * cols, cols))
         if r < rows - 1 { out = sbAppend(out, fromCharCode(10)) }
         r = r + 1
     }
@@ -497,6 +508,35 @@ func gridCursor(state, cols, rows) {
     let total = cols * rows
     let tail = substring(state, 7 * total + 1, len(state))
     emit _cf(tail, 0) + "," + _cf(tail, 1)
+}
+
+// gridScrolled(state, cols, rows) — the rows that scrolled off the top during the
+// last gridFeed (rendered text, one per \n). Empty if nothing scrolled. The
+// bridge drains this into its scrollback history.
+func gridScrolled(state, cols, rows) {
+    let total = cols * rows
+    let tailFull = substring(state, 7 * total + 1, len(state))
+    let sohp = indexOf(tailFull, fromCharCode(1))
+    emit substring(tailFull, sohp + 1, len(tailFull))
+}
+
+// gridScrollView(scrollback, gridText, rows, scrollOff) — `rows` lines of the
+// combined (scrollback ++ live grid) buffer, scrolled `scrollOff` lines up from
+// the bottom. scrollOff 0 = the live screen.
+func gridScrollView(scrollback, gridText, rows, scrollOff) {
+    let combined = scrollback + gridText
+    let nLines = lineCount(combined)
+    let start = nLines - rows - scrollOff
+    if start < 0 { start = 0 }
+    let out = sbNew()
+    let i = 0
+    while i < rows {
+        let li = start + i
+        if li >= 0 && li < nLines { out = sbAppend(out, getLine(combined, li)) }
+        if i < rows - 1 { out = sbAppend(out, fromCharCode(10)) }
+        i = i + 1
+    }
+    emit sbToString(out)
 }
 
 // renderGrid(s, cols, rows) — one-shot: feed s into a fresh grid, render to text.
