@@ -57,7 +57,11 @@ func kryoterm_interactive(shellPath, cols, rows) {
     // aliases. (Earlier we used `zsh -f` for a clean prompt, but the user wants
     // their config.) term.k handles enough VT (incl ESC7/8 cursor save/restore)
     // for a powerlevel10k prompt to render.
-    let m = ptyOpen(shellPath)
+    // Open the pty + spawn the shell directly (not ptyOpen) so we keep the child
+    // pid — procAlive(pid) lets us notice when the shell exits and shut down.
+    let m = ptyMaster("/dev/ptmx")
+    let slave = ptySlaveName(m)
+    let childPid = ptyForkExec(slave, shellPath)
     // Tell the pty its real size (TIOCSWINSZ) so zsh/programs wrap at the grid
     // width. The master ioctl ENOTTYs until the forked child has opened the
     // slave, so retry briefly until it succeeds (returns 0). zsh then gets
@@ -90,6 +94,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
     let findIdx = 0                       // which match (0 = most recent), wraps
     let findResult = "-1,-1,-1,0,0"           // matchRow,matchCol,matchLen for the shim to highlight
     let bellOn = 0                            // one-shot bell for the next frame
+    let aliveCtr = 0                          // throttle the shell-alive probe
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
@@ -227,6 +232,11 @@ func kryoterm_interactive(shellPath, cols, rows) {
             }
             dirty = 0
             bellOn = 0                      // one-shot consumed by this frame
+        }
+        aliveCtr = aliveCtr + 1
+        if aliveCtr >= 30 {                // ~240ms: reap + check if the shell exited
+            aliveCtr = 0
+            if waitChild(childPid) != 0 { i = 2000000000 }   // exited -> stop; shim sees EOF, closes window
         }
         sleepUs(0, 8000)                   // ~8ms poll
         i = i + 1
