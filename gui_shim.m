@@ -344,6 +344,15 @@ static void sendResize(NSView *v) {
         if ([ch isEqualToString:@"c"]) { [self copySelection]; return; }
         if ([ch isEqualToString:@"v"]) { [self pasteClipboard]; return; }
         if ([ch isEqualToString:@"k"]) { write(gMaster, "\036C,0\036", 5); return; }  // clear
+        if ([ch isEqualToString:@"="] || [ch isEqualToString:@"+"]) {                  // zoom in
+            gFontSize += 1; applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
+        }
+        if ([ch isEqualToString:@"-"]) {                                               // zoom out
+            if (gFontSize > 7) gFontSize -= 1; applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
+        }
+        if ([ch isEqualToString:@"0"]) {                                               // reset zoom
+            loadConfig(); applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
+        }
     }
     // Special keys -> ANSI/VT sequences (arrows for history/completion, etc.).
     // NSEvent.characters returns private-use function-key codepoints for these,
