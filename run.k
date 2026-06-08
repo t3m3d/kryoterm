@@ -94,10 +94,11 @@ func kryoterm_interactive(shellPath, cols, rows) {
             // Stripped from the keystroke stream; everything else goes to the shell.
             let rs = fromCharCode(30)
             let mi = indexOf(keys, rs)
-            if mi >= 0 {
+            while mi >= 0 {                       // strip ALL markers in this read
                 let rest = substring(keys, mi + 1, len(keys))
                 let mj = indexOf(rest, rs)
-                if mj >= 0 {
+                if mj < 0 { mi = 0 - 1 }          // incomplete marker -> stop
+                else {
                     let payload = substring(rest, 0, mj)
                     let c0 = indexOf(payload, ",")
                     if c0 > 0 {
@@ -129,6 +130,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
                         }
                     }
                     keys = substring(keys, 0, mi) + substring(rest, mj + 1, len(rest))
+                    mi = indexOf(keys, rs)       // find the next marker
                 }
             }
             if len(keys) > 0 {
