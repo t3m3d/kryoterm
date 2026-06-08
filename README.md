@@ -10,9 +10,10 @@ thing the Krypton backend can't do yet (no `objc_msgSend` FFI). The shim does
 **Status: working macOS terminal.** Live `/bin/zsh` (sources your `~/.zshrc` —
 powerlevel10k, history, aliases), full colour incl. truecolor, scrollback,
 selection/copy, find, resize reflow, configurable theme/font/cursor. Runs full
-TUIs — **mouse reporting** (X10/SGR-1006), **alternate screen** (1049/1047/47),
-**cursor show/hide** (DECSET 25) and **shape** (DECSCUSR) — so vim, htop, less,
-tmux work. Typing `exit` (or any shell EOF) closes the window — the bridge reaps
+TUIs — **mouse reporting** (X10/SGR-1006, wheel scrolls in alt-screen),
+**alternate screen** (1049/1047/47), **cursor show/hide** (DECSET 25) +
+**shape** (DECSCUSR), **bracketed paste** (2004) and **focus reporting** (1004) —
+so vim, htop, less, tmux work. Typing `exit` (or any shell EOF) closes the window — the bridge reaps
 the shell via the native `waitChild` builtin and shuts down.
 
 ```
