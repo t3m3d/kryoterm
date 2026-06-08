@@ -27,6 +27,9 @@ static int   gReadFd = -1;   // pipe from kryoterm's stdout (read frames)
 static pid_t gChild  = -1;
 static int   gCurRow = 0, gCurCol = 0;   // cursor cell (from each frame's header)
 static BOOL  gCursorOn = YES;            // blink phase
+static int   gCols = 104, gRows = 30;    // current grid size (set on resize)
+static int   gSelAR = 0, gSelAC = 0, gSelER = 0, gSelEC = 0;   // selection anchor/end
+static BOOL  gHasSel = NO;
 static NSFont *gFont;
 static CGFloat gCharW = 7.8, gLineH = 15.5;
 static const CGFloat kPadX = 6, kPadY = 4;   // text origin inside the view
@@ -210,6 +213,7 @@ static void sendResize(NSView *v) {
     int rows = (int)((v.bounds.size.height - 2 * kPadY) / gLineH);
     if (cols < 4) cols = 4;
     if (rows < 2) rows = 2;
+    gCols = cols; gRows = rows;
     char buf[64];
     int len = snprintf(buf, sizeof buf, "\x1e%d,%d\x1e", cols, rows);
     write(gMaster, buf, len);
@@ -223,6 +227,53 @@ static void sendResize(NSView *v) {
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)isFlipped { return YES; }              // text origin at top-left
 - (void)viewDidEndLiveResize { sendResize(self); }   // reflow grid when drag ends
+
+// ---- mouse selection ----
+- (void)pointToCell:(NSEvent *)e row:(int *)row col:(int *)col {
+    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
+    int c = (int)((p.x - kPadX) / gCharW);
+    int r = (int)((p.y - kPadY) / gLineH);
+    if (c < 0) c = 0;  if (c > gCols) c = gCols;
+    if (r < 0) r = 0;  if (r >= gRows) r = gRows - 1;
+    *row = r; *col = c;
+}
+- (void)mouseDown:(NSEvent *)e {
+    [self pointToCell:e row:&gSelAR col:&gSelAC];
+    gSelER = gSelAR; gSelEC = gSelAC; gHasSel = NO;
+    [self setNeedsDisplay:YES];
+}
+- (void)mouseDragged:(NSEvent *)e {
+    [self pointToCell:e row:&gSelER col:&gSelEC];
+    gHasSel = (gSelER != gSelAR || gSelEC != gSelAC);
+    [self setNeedsDisplay:YES];
+}
+- (NSString *)selectedText {
+    if (!gHasSel || !self.attr) return nil;
+    NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
+    int r1 = gSelAR, c1 = gSelAC, r2 = gSelER, c2 = gSelEC;
+    if (r2 < r1 || (r2 == r1 && c2 < c1)) { int tr=r1,tc=c1; r1=r2;c1=c2;r2=tr;c2=tc; }
+    NSMutableString *out = [NSMutableString string];
+    for (int r = r1; r <= r2 && r < (int)lines.count; r++) {
+        NSString *ln = lines[r]; int L = (int)ln.length;
+        int a = (r==r1)? c1 : 0, b = (r==r2)? c2 : L;
+        if (a > L) a = L;  if (b > L) b = L;  if (b < a) b = a;
+        [out appendString:[ln substringWithRange:NSMakeRange(a, b-a)]];
+        if (r < r2) [out appendString:@"\n"];
+    }
+    return out;
+}
+- (void)copySelection {
+    NSString *t = [self selectedText];
+    if (t.length) {
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        [pb clearContents];
+        [pb setString:t forType:NSPasteboardTypeString];
+    }
+}
+- (void)pasteClipboard {
+    NSString *t = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+    if (t.length && gMaster >= 0) { const char *b = [t UTF8String]; write(gMaster, b, strlen(b)); }
+}
 - (void)drawRect:(NSRect)dirty {
     [(gCurBg ?: [NSColor blackColor]) set];
     NSRectFill(self.bounds);
@@ -239,9 +290,24 @@ static void sendResize(NSView *v) {
         [cc set];
         NSRectFill(r);
     }
+    // selection highlight (translucent overlay)
+    if (gHasSel) {
+        int r1=gSelAR,c1=gSelAC,r2=gSelER,c2=gSelEC;
+        if (r2<r1 || (r2==r1 && c2<c1)) { int tr=r1,tc=c1; r1=r2;c1=c2;r2=tr;c2=tc; }
+        [[NSColor colorWithCalibratedRed:0.30 green:0.48 blue:0.85 alpha:0.30] set];
+        for (int r = r1; r <= r2; r++) {
+            int a = (r==r1)? c1 : 0, b = (r==r2)? c2 : gCols;
+            NSRectFill(NSMakeRect(kPadX + a*gCharW, kPadY + r*gLineH, (b-a)*gCharW, gLineH));
+        }
+    }
 }
 - (void)keyDown:(NSEvent *)e {
     if (gMaster < 0) return;
+    if (e.modifierFlags & NSEventModifierFlagCommand) {   // ⌘C copy / ⌘V paste
+        NSString *ch = e.charactersIgnoringModifiers;
+        if ([ch isEqualToString:@"c"]) { [self copySelection]; return; }
+        if ([ch isEqualToString:@"v"]) { [self pasteClipboard]; return; }
+    }
     // Special keys -> ANSI/VT sequences (arrows for history/completion, etc.).
     // NSEvent.characters returns private-use function-key codepoints for these,
     // which the shell can't use, so map by keyCode instead.
