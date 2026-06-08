@@ -743,11 +743,25 @@ static void buildMenu(void) {
     [editMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *wt = [editMenu addItemWithTitle:@"Writing Tools" action:NULL keyEquivalent:@""];
     NSMenu *wtSub = [[NSMenu alloc] initWithTitle:@"Writing Tools"];
-    [[wtSub addItemWithTitle:@"(coming soon)" action:NULL keyEquivalent:@""] setEnabled:NO];
+    SEL showWT = @selector(showWritingTools:);   // macOS 15.2+; opens the panel (Apple gates per-action inside it)
+    [wtSub addItemWithTitle:@"Show Writing Tools" action:showWT keyEquivalent:@""];
+    [wtSub addItem:[NSMenuItem separatorItem]];
+    [wtSub addItemWithTitle:@"Proofread" action:showWT keyEquivalent:@""];
+    [wtSub addItemWithTitle:@"Rewrite" action:showWT keyEquivalent:@""];
+    [wtSub addItemWithTitle:@"Make Friendly" action:showWT keyEquivalent:@""];
+    [wtSub addItem:[NSMenuItem separatorItem]];
+    [wtSub addItemWithTitle:@"Make Professional" action:showWT keyEquivalent:@""];
+    [wtSub addItemWithTitle:@"Make Concise" action:showWT keyEquivalent:@""];
+    [wtSub addItem:[NSMenuItem separatorItem]];
+    [wtSub addItemWithTitle:@"Summarize" action:showWT keyEquivalent:@""];
+    [wtSub addItemWithTitle:@"Make Key Points" action:showWT keyEquivalent:@""];
+    [wtSub addItemWithTitle:@"Make List" action:showWT keyEquivalent:@""];
+    [wtSub addItemWithTitle:@"Make Table" action:showWT keyEquivalent:@""];
     [wt setSubmenu:wtSub];
     NSMenuItem *af = [editMenu addItemWithTitle:@"AutoFill" action:NULL keyEquivalent:@""];
     NSMenu *afSub = [[NSMenu alloc] initWithTitle:@"AutoFill"];
-    [[afSub addItemWithTitle:@"(coming soon)" action:NULL keyEquivalent:@""] setEnabled:NO];
+    [afSub addItemWithTitle:@"Contacts" action:@selector(autoFillContacts:) keyEquivalent:@""];
+    [afSub addItemWithTitle:@"Passwords" action:@selector(autoFillPasswords:) keyEquivalent:@""];
     [af setSubmenu:afSub];
     [editMenu addItem:[NSMenuItem separatorItem]];
     [editMenu addItemWithTitle:@"Start Dictation…" action:@selector(startDictation:) keyEquivalent:@""];
@@ -779,7 +793,7 @@ int main(int argc, const char *argv[]) {
                kp0 = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]); }
 
         setenv("TERM_PROGRAM", "kryoterm", 1);
-        setenv("TERM_PROGRAM_VERSION", "1.2", 1);
+        setenv("TERM_PROGRAM_VERSION", "1.3", 1);
         setenv("TERM", "xterm-256color", 1);
         const char *curPath = getenv("PATH");
         if (!curPath || !strstr(curPath, "/opt/homebrew")) {
