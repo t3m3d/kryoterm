@@ -87,7 +87,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
     let scrollOff = 0                     // view offset (lines up from the bottom; 0=live)
     let findQuery = ""                    // active find-in-scrollback query
     let findIdx = 0                       // which match (0 = most recent), wraps
-    let findResult = "-1,-1,-1"           // matchRow,matchCol,matchLen for the shim to highlight
+    let findResult = "-1,-1,-1,0,0"           // matchRow,matchCol,matchLen for the shim to highlight
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
@@ -140,7 +140,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
                         if cmd == "F" { findQuery = args  findIdx = 0  dirty = 1  quiet = 2 }   // new search
                         if cmd == "N" { findIdx = findIdx + 1  dirty = 1  quiet = 2 }            // next match
                         if cmd == "P" { findIdx = findIdx - 1  dirty = 1  quiet = 2 }            // prev match
-                        if cmd == "X" { findQuery = ""  findResult = "-1,-1,-1"  scrollOff = 0  dirty = 1  quiet = 2 }
+                        if cmd == "X" { findQuery = ""  findResult = "-1,-1,-1,0,0"  scrollOff = 0  dirty = 1  quiet = 2 }
                         if cmd == "F" || cmd == "N" || cmd == "P" {
                             let res = gridFind(scrollback, gridRender(st, cols, rows), rows, findQuery, findIdx)
                             let c1 = indexOf(res, ",")

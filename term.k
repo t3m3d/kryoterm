@@ -549,7 +549,7 @@ func _stripSgrLine(s) {
 // "scrollOff,matchRow,matchCol,matchLen" to bring it into view + highlight it, or
 // "-1,-1,-1,-1" if no match / empty query.
 func gridFind(scrollback, gridText, rows, query, matchIdx) {
-    if len(query) == 0 { emit "-1,-1,-1,-1" }
+    if len(query) == 0 { emit "-1,-1,-1,-1,0,0" }
     let combined = scrollback + gridText
     let nLines = lineCount(combined)
     let total = 0
@@ -558,7 +558,7 @@ func gridFind(scrollback, gridText, rows, query, matchIdx) {
         if indexOf(_stripSgrLine(getLine(combined, li)), query) >= 0 { total = total + 1 }
         li = li - 1
     }
-    if total == 0 { emit "-1,-1,-1,-1" }
+    if total == 0 { emit "-1,-1,-1,-1,0,0" }
     let mi = matchIdx
     while mi >= total { mi = mi - total }
     while mi < 0 { mi = mi + total }
@@ -574,13 +574,19 @@ func gridFind(scrollback, gridText, rows, query, matchIdx) {
         }
         li = li - 1
     }
-    let scrollOff = nLines - rows - foundLine + (rows / 3)   // place match ~1/3 down
-    let smax = nLines - rows
-    if smax < 0 { smax = 0 }
-    if scrollOff < 0 { scrollOff = 0 }
-    if scrollOff > smax { scrollOff = smax }
-    let viewStart = nLines - rows - scrollOff
-    emit scrollOff + "," + (foundLine - viewStart) + "," + foundCol + "," + len(query)
+    // Place the match ~1/3 down the view. NOTE: macho integer subtraction
+    // underflows unsigned, so a-b is only safe when a>b — guard every step.
+    let smax = 0
+    if nLines > rows { smax = nLines - rows }
+    let third = rows / 3
+    let viewStart = 0
+    if foundLine > third { viewStart = foundLine - third }
+    if viewStart > smax { viewStart = smax }
+    let scrollOff = 0
+    if smax > viewStart { scrollOff = smax - viewStart }
+    let matchRow = 0
+    if foundLine > viewStart { matchRow = foundLine - viewStart }
+    emit scrollOff + "," + matchRow + "," + foundCol + "," + len(query) + "," + (mi + 1) + "," + total
 }
 
 // gridScrollView(scrollback, gridText, rows, scrollOff) — `rows` lines of the

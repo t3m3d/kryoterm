@@ -30,7 +30,9 @@ static BOOL  gCursorOn = YES;            // blink phase
 static int   gCols = 104, gRows = 30;    // current grid size (set on resize)
 static int   gScrollOff = 0, gScrollMax = 0;   // scrollback view position
 static int   gMatchRow = -1, gMatchCol = 0, gMatchLen = 0;   // find highlight (view-relative)
+static int   gMatchNum = 0, gMatchTotal = 0;                 // "N of M" matches
 static NSTextField *gSearchField;        // ⌘F search bar
+static NSTextField *gSearchCount;        // "N/M" match counter
 static int   gSelAR = 0, gSelAC = 0, gSelER = 0, gSelEC = 0;   // selection anchor/end
 static BOOL  gHasSel = NO;
 static NSFont *gFont;
@@ -263,10 +265,13 @@ static void sendResize(NSView *v) {
 - (void)openSearch {
     gSearchField.hidden = NO;
     gSearchField.stringValue = @"";
+    gSearchCount.hidden = NO;
+    gSearchCount.stringValue = @"";
     [self.window makeFirstResponder:gSearchField];
 }
 - (void)closeSearch {
     gSearchField.hidden = YES;
+    gSearchCount.hidden = YES;
     if (gMaster >= 0) write(gMaster, "\036X,0\036", 5);
     [self.window makeFirstResponder:self];
 }
@@ -495,19 +500,23 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            // header = row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,title
-                            int fv[7] = {0,0,0,0,0,0,0}; int neg[7] = {0,0,0,0,0,0,0};
+                            // header = row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,matchNum,matchTotal,title
+                            int fv[9] = {0,0,0,0,0,0,0,0,0}; int neg[9] = {0,0,0,0,0,0,0,0,0};
                             int field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 7) { titleStart = m+1; break; } }
-                                else if (field < 7) {
+                                if (p[m] == ',') { field++; if (field == 9) { titleStart = m+1; break; } }
+                                else if (field < 9) {
                                     if (p[m] == '-') neg[field] = 1;
                                     else if (p[m] >= '0' && p[m] <= '9') fv[field] = fv[field]*10 + (p[m]-'0');
                                 }
                             }
-                            for (int q = 0; q < 7; q++) if (neg[q]) fv[q] = -fv[q];
+                            for (int q = 0; q < 9; q++) if (neg[q]) fv[q] = -fv[q];
                             gCurRow = fv[0]; gCurCol = fv[1]; gScrollOff = fv[2]; gScrollMax = fv[3];
                             gMatchRow = fv[4]; gMatchCol = fv[5]; gMatchLen = fv[6];
+                            gMatchNum = fv[7]; gMatchTotal = fv[8];
+                            if (!gSearchField.hidden)
+                                gSearchCount.stringValue = gMatchTotal > 0
+                                    ? [NSString stringWithFormat:@"%d/%d", gMatchNum, gMatchTotal] : @"0/0";
                             if (titleStart && titleStart < k) {
                                 NSString *t = [[NSString alloc] initWithBytes:p+titleStart length:k-titleStart encoding:NSUTF8StringEncoding];
                                 if (t.length) [gWin setTitle:t];
@@ -599,6 +608,15 @@ int main(int argc, const char *argv[]) {
         [gSearchField.cell setPlaceholderString:@"find in scrollback…"];
         [gSearchField setAutoresizingMask:(NSViewMinXMargin | NSViewMaxYMargin)];
         [gView addSubview:gSearchField];
+
+        gSearchCount = [[NSTextField alloc] initWithFrame:NSMakeRect(frame.size.width-230-62, 6, 56, 20)];
+        gSearchCount.editable = NO; gSearchCount.bezeled = NO; gSearchCount.drawsBackground = NO;
+        gSearchCount.hidden = YES;
+        gSearchCount.alignment = NSTextAlignmentRight;
+        gSearchCount.font = [NSFont systemFontOfSize:11];
+        gSearchCount.textColor = [NSColor secondaryLabelColor];
+        [gSearchCount setAutoresizingMask:(NSViewMinXMargin | NSViewMaxYMargin)];
+        [gView addSubview:gSearchCount];
         [win setInitialFirstResponder:gView];
         [win center];
         [win makeKeyAndOrderFront:nil];
