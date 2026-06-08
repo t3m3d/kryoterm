@@ -592,6 +592,14 @@ func gridPaste(state, cols, rows) {
     emit _cf(tail, 15)
 }
 
+// gridAlt(state, cols, rows) — 1 if the alternate screen is active.
+func gridAlt(state, cols, rows) {
+    let total = cols * rows
+    let tailFull = substring(state, 7 * total + 1, len(state))
+    let tail = substring(tailFull, 0, indexOf(tailFull, fromCharCode(1)))
+    emit _cf(tail, 10)
+}
+
 // gridBell(state, cols, rows) — 1 if a bare BEL (0x07) arrived during the last
 // gridFeed, else 0. The bridge raises a one-shot bell from this.
 func gridBell(state, cols, rows) {

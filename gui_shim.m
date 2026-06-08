@@ -34,6 +34,7 @@ static int   gMatchNum = 0, gMatchTotal = 0;                 // "N of M" matches
 static int   gMouseLevel = 0, gMouseSgr = 0;                 // app mouse tracking + SGR encoding
 static int   gCursorShape = 0;                              // app cursor shape (DECSCUSR): 0 config, 1 bar, 2 block, 3 underline
 static int   gPasteMode = 0;                                // app enabled bracketed paste (DECSET 2004)
+static int   gAltActive = 0;                                // alternate screen active
 static BOOL  gMouseReporting = NO;                           // current drag is a reported mouse press
 static int   gLastMouseR = -1, gLastMouseC = -1;            // throttle motion reports
 static int   gMousePressBtn = 0;                            // button held (for the release report)
@@ -283,6 +284,12 @@ static void sendScrollbackCap(void) {
         int btn = (lines > 0 ? 64 : 65) + [self mouseModsFor:e];
         int n = lines > 0 ? lines : -lines;
         for (int i = 0; i < n && i < 8; i++) [self sendMouseButton:btn row:r col:c press:YES];
+        return;
+    }
+    if (gAltActive && !(e.modifierFlags & NSEventModifierFlagShift)) {        // alt-screen TUI: wheel -> arrow keys
+        const char *arrow = lines > 0 ? "\x1b[A" : "\x1b[B";
+        int n = lines > 0 ? lines : -lines;
+        for (int i = 0; i < n && i < 6; i++) write(gMaster, arrow, 3);
         return;
     }
     char buf[32];
@@ -695,21 +702,21 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            // header = row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,cshape,paste,title
-                            int fv[14] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0}; int neg[14] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+                            // header = row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,cshape,paste,alt,title
+                            int fv[15] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; int neg[15] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
                             int field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 14) { titleStart = m+1; break; } }
-                                else if (field < 14) {
+                                if (p[m] == ',') { field++; if (field == 15) { titleStart = m+1; break; } }
+                                else if (field < 15) {
                                     if (p[m] == '-') neg[field] = 1;
                                     else if (p[m] >= '0' && p[m] <= '9') fv[field] = fv[field]*10 + (p[m]-'0');
                                 }
                             }
-                            for (int q = 0; q < 14; q++) if (neg[q]) fv[q] = -fv[q];
+                            for (int q = 0; q < 15; q++) if (neg[q]) fv[q] = -fv[q];
                             gCurRow = fv[0]; gCurCol = fv[1]; gScrollOff = fv[2]; gScrollMax = fv[3];
                             gMatchRow = fv[4]; gMatchCol = fv[5]; gMatchLen = fv[6];
                             gMatchNum = fv[7]; gMatchTotal = fv[8];
-                            gMouseLevel = fv[10]; gMouseSgr = fv[11]; gCursorShape = fv[12]; gPasteMode = fv[13];
+                            gMouseLevel = fv[10]; gMouseSgr = fv[11]; gCursorShape = fv[12]; gPasteMode = fv[13]; gAltActive = fv[14];
                             if (fv[9] == 1) {                       // bell
                                 if (gBellMode == 2) NSBeep();
                                 else if (gBellMode == 1) {
