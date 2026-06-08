@@ -128,6 +128,12 @@ func kryoterm_interactive(shellPath, cols, rows) {
                             if scrollOff < 0 { scrollOff = 0 }
                             dirty = 1  quiet = 2
                         }
+                        if cmd == "C" {                  // clear screen + scrollback
+                            scrollback = ""  scrollOff = 0
+                            st = gridNew(cols, rows)
+                            fdWrite(m, fromCharCode(12), 1)   // Ctrl-L -> shell redraws prompt
+                            dirty = 1  quiet = 2
+                        }
                     }
                     keys = substring(keys, 0, mi) + substring(rest, mj + 1, len(rest))
                     mi = indexOf(keys, rs)       // find the next marker

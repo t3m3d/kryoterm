@@ -343,6 +343,7 @@ static void sendResize(NSView *v) {
         NSString *ch = e.charactersIgnoringModifiers;
         if ([ch isEqualToString:@"c"]) { [self copySelection]; return; }
         if ([ch isEqualToString:@"v"]) { [self pasteClipboard]; return; }
+        if ([ch isEqualToString:@"k"]) { write(gMaster, "\036C,0\036", 5); return; }  // clear
     }
     // Special keys -> ANSI/VT sequences (arrows for history/completion, etc.).
     // NSEvent.characters returns private-use function-key codepoints for these,
