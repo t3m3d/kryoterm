@@ -217,7 +217,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0" + fromCharCode(1)
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0,0,0,0" + fromCharCode(1) + fromCharCode(1)
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -233,6 +233,10 @@ func gridFeed(state, s, cols, rows) {
     let tailFull = substring(state, g5 + 2 * total + 1, len(state))
     let sohp = indexOf(tailFull, fromCharCode(1))
     let tail = substring(tailFull, 0, sohp)
+    let afterSoh = substring(tailFull, sohp + 1, len(tailFull))   // scrolled <SOH> savedGrids
+    let soh2 = indexOf(afterSoh, fromCharCode(1))
+    let savedGrids = ""                  // saved MAIN planes while the alt screen is active
+    if soh2 >= 0 { savedGrids = substring(afterSoh, soh2 + 1, len(afterSoh)) }
     let cr = _cf(tail, 0)
     let cc = _cf(tail, 1)
     let pen = _cf(tail, 2)
@@ -242,6 +246,9 @@ func gridFeed(state, s, cols, rows) {
     let pw = _cf(tail, 6)                // pending wrap (deferred auto-margin)
     let mlevel = _cf(tail, 8)            // mouse tracking: 0 off, 1 click, 2 drag, 3 any-motion
     let msgr = _cf(tail, 9)              // mouse SGR(1006) encoding on/off (persist)
+    let altActive = _cf(tail, 10)        // alt screen (1049/1047/47) currently active
+    let savedAltCr = _cf(tail, 11)       // main cursor saved on alt-enter
+    let savedAltCc = _cf(tail, 12)
     let scrolled = ""                    // rows scrolled off THIS feed (reset each call)
     let bell = 0                         // bare BEL (0x07) seen THIS feed (reset each call)
     let n = len(s)
@@ -310,6 +317,26 @@ func gridFeed(state, s, cols, rows) {
                                 if mode == 1002 { if on == 1 { mlevel = 2 } else { mlevel = 0 } }  // button-drag
                                 if mode == 1003 { if on == 1 { mlevel = 3 } else { mlevel = 0 } }  // any-motion
                                 if mode == 1006 { msgr = on }                                      // SGR encoding
+                                if mode == 1049 || mode == 1047 || mode == 47 {                    // alt screen
+                                    if on == 1 {
+                                        if altActive == 0 {
+                                            savedGrids = grid + attr + battr     // save the main planes
+                                            savedAltCr = cr  savedAltCc = cc
+                                            grid = _blankRow(total)  attr = _fill1(total)  battr = _fill1(total)
+                                            cr = 0  cc = 0  pw = 0
+                                            altActive = 1
+                                        }
+                                    } else {
+                                        if altActive == 1 {
+                                            grid = substring(savedGrids, 0, g5)             // restore main
+                                            attr = substring(savedGrids, g5, g5 + total)
+                                            battr = substring(savedGrids, g5 + total, g5 + 2 * total)
+                                            cr = savedAltCr  cc = savedAltCc  pw = 0
+                                            savedGrids = ""
+                                            altActive = 0
+                                        }
+                                    }
+                                }
                             }
                         }
                         i = j + 1
@@ -338,7 +365,7 @@ func gridFeed(state, s, cols, rows) {
             if c == 10 {                                                         // LF → newline
                 cr = cr + 1  cc = 0  pw = 0
                 if cr >= rows {
-                    scrolled = scrolled + _renderRow(grid, attr, battr, 0, cols) + fromCharCode(10)
+                    if altActive == 0 { scrolled = scrolled + _renderRow(grid, attr, battr, 0, cols) + fromCharCode(10) }
                     grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
                     attr = _scrollUp(attr, cols, total, _fill1(cols))
                     battr = _scrollUp(battr, cols, total, _fill1(cols))
@@ -362,7 +389,7 @@ func gridFeed(state, s, cols, rows) {
                                 if pw == 1 {                                     // deferred wrap from last col
                                     cc = 0  cr = cr + 1  pw = 0
                                     if cr >= rows {
-                                        scrolled = scrolled + _renderRow(grid, attr, battr, 0, cols) + fromCharCode(10)
+                                        if altActive == 0 { scrolled = scrolled + _renderRow(grid, attr, battr, 0, cols) + fromCharCode(10) }
                                         grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
                                         attr = _scrollUp(attr, cols, total, _fill1(cols))
                                         battr = _scrollUp(battr, cols, total, _fill1(cols))
@@ -385,7 +412,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + fromCharCode(1) + scrolled
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
@@ -550,7 +577,10 @@ func gridScrolled(state, cols, rows) {
     let total = cols * rows
     let tailFull = substring(state, 7 * total + 1, len(state))
     let sohp = indexOf(tailFull, fromCharCode(1))
-    emit substring(tailFull, sohp + 1, len(tailFull))
+    let afterSoh = substring(tailFull, sohp + 1, len(tailFull))   // scrolled <SOH> savedGrids
+    let soh2 = indexOf(afterSoh, fromCharCode(1))
+    if soh2 >= 0 { emit substring(afterSoh, 0, soh2) }            // just the scrolled part
+    emit afterSoh
 }
 
 // _stripSgrLine(s) — drop ESC[…<final> sequences so a line is searchable plain text.
