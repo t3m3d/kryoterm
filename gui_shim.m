@@ -183,6 +183,19 @@ static NSAttributedString *parseFrame(NSData *data) {
     return out;
 }
 
+// Tell kryoterm the grid size for a view's pixel size: RS "cols,rows" RS on the
+// keystroke pipe. kryoterm rebuilds its grid + sets the pty size.
+static void sendResize(NSView *v) {
+    if (gMaster < 0 || gCharW < 1 || gLineH < 1) return;
+    int cols = (int)((v.bounds.size.width  - 2 * kPadX) / gCharW);
+    int rows = (int)((v.bounds.size.height - 2 * kPadY) / gLineH);
+    if (cols < 4) cols = 4;
+    if (rows < 2) rows = 2;
+    char buf[64];
+    int len = snprintf(buf, sizeof buf, "\x1e%d,%d\x1e", cols, rows);
+    write(gMaster, buf, len);
+}
+
 @interface KryptonView : NSView
 @property (strong) NSAttributedString *attr;   // the latest frame
 @end
@@ -190,6 +203,7 @@ static NSAttributedString *parseFrame(NSData *data) {
 @implementation KryptonView
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)isFlipped { return YES; }              // text origin at top-left
+- (void)viewDidEndLiveResize { sendResize(self); }   // reflow grid when drag ends
 - (void)drawRect:(NSRect)dirty {
     [(gCurBg ?: [NSColor blackColor]) set];
     NSRectFill(self.bounds);
@@ -377,6 +391,7 @@ int main(int argc, const char *argv[]) {
             [NSApp activateIgnoringOtherApps:YES];
             [win makeKeyAndOrderFront:nil];
             [win makeFirstResponder:gView];
+            sendResize(gView);   // sync kryoterm's grid to the actual window size
             glog("post-runloop: isKey=%d frIsView=%d", (int)[win isKeyWindow],
                  (int)([win firstResponder] == gView));
         });

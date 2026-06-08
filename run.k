@@ -85,7 +85,32 @@ func kryoterm_interactive(shellPath, cols, rows) {
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
-        if len(keys) > 0 { fdWrite(m, keys, len(keys)) }
+        if len(keys) > 0 {
+            // Resize control: the shim sends RS(0x1e) "cols,rows" RS(0x1e) on
+            // window resize. Strip it, rebuild the grid at the new size, and tell
+            // the pty (SIGWINCH -> shell repaints). Other bytes go to the shell.
+            let rs = fromCharCode(30)
+            let mi = indexOf(keys, rs)
+            if mi >= 0 {
+                let rest = substring(keys, mi + 1, len(keys))
+                let mj = indexOf(rest, rs)
+                if mj >= 0 {
+                    let dims = substring(rest, 0, mj)
+                    let comma = indexOf(dims, ",")
+                    if comma > 0 {
+                        let nc = toInt(substring(dims, 0, comma))
+                        let nr = toInt(substring(dims, comma + 1, len(dims)))
+                        if nc >= 4 && nr >= 2 && (nc != cols || nr != rows) {
+                            cols = nc  rows = nr
+                            st = gridNew(cols, rows)
+                            ptySetSize(m, rows, cols)
+                        }
+                    }
+                    keys = substring(keys, 0, mi) + substring(rest, mj + 1, len(rest))
+                }
+            }
+            if len(keys) > 0 { fdWrite(m, keys, len(keys)) }
+        }
         let out = fdRead(m, 65536)
         if len(out) > 0 {
             // A pty read can split an escape or UTF-8 char; feed only up to the
