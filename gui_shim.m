@@ -64,6 +64,7 @@ static NSString *gFontName = @"JetBrainsMono Nerd Font Mono";
 static CGFloat gFontSize = 13;
 static CGFloat gOpacity = 1.0;           // window background opacity (text stays opaque)
 static BOOL gCopyOnSelect = NO;          // auto-copy a selection on mouse-up
+static int gScrollbackLines = 2000;      // scrollback history cap
 
 static NSColor *hexColor(const char *h, NSColor *fallback) {
     while (*h == '#' || *h == ' ' || *h == '\t') h++;
@@ -82,7 +83,7 @@ static void loadConfig(void) {
     gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
     gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
     gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;  gOpacity = 1.0;
-    kPadX = 6;  kPadY = 4;  gCopyOnSelect = NO;
+    kPadX = 6;  kPadY = 4;  gCopyOnSelect = NO;  gScrollbackLines = 2000;
     NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -109,7 +110,8 @@ static void loadConfig(void) {
            "# Window background opacity (0.2-1.0; text stays opaque).\n"
            "opacity          = 1.0\n"
            "padding          = 6\n"
-           "copy_on_select   = false        # auto-copy selection; middle-click pastes\n";
+           "copy_on_select   = false        # auto-copy selection; middle-click pastes\n"
+           "scrollback_lines = 2000\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -130,6 +132,7 @@ static void loadConfig(void) {
         if ([k isEqualToString:@"opacity"])     { CGFloat o = atof(v.UTF8String); if (o >= 0.2 && o <= 1.0) gOpacity = o; continue; }
         if ([k isEqualToString:@"padding"])     { CGFloat pd = atof(v.UTF8String); if (pd >= 0 && pd <= 40) { kPadX = pd; kPadY = pd; } continue; }
         if ([k isEqualToString:@"copy_on_select"]) { gCopyOnSelect = ([v hasPrefix:@"t"] || [v hasPrefix:@"1"] || [v hasPrefix:@"y"]); continue; }
+        if ([k isEqualToString:@"scrollback_lines"]) { int n = atoi(v.UTF8String); if (n >= 100) gScrollbackLines = n; continue; }
         NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
         if      ([k isEqualToString:@"cursor_color"])     gCursorColor = c;
@@ -235,6 +238,11 @@ static void sendResize(NSView *v) {
     int len = snprintf(buf, sizeof buf, "\036R,%d,%d\036", cols, rows);
     write(gMaster, buf, len);
 }
+static void sendScrollbackCap(void) {
+    if (gMaster < 0) return;
+    char buf[32]; int n = snprintf(buf, sizeof buf, "\036L,%d\036", gScrollbackLines);
+    write(gMaster, buf, n);
+}
 
 @interface KryptonView : NSView <NSTextFieldDelegate>
 @property (strong) NSAttributedString *attr;   // the latest frame
@@ -338,6 +346,10 @@ static void sendResize(NSView *v) {
 - (void)mouseDown:(NSEvent *)e {
     int r, c; [self pointToCell:e row:&r col:&c];
     if (e.modifierFlags & NSEventModifierFlagCommand) { [self openUrlAtRow:r col:c]; return; }  // ⌘-click opens URLs
+    if (e.modifierFlags & NSEventModifierFlagShift) {           // shift-click extends from the anchor
+        gSelER = r; gSelEC = c; gHasSel = (gSelER != gSelAR || gSelEC != gSelAC);
+        [self setNeedsDisplay:YES]; return;
+    }
     if (e.clickCount == 2)      [self selectWordRow:r col:c];   // word
     else if (e.clickCount == 3) [self selectLineRow:r];         // line
     else { gSelAR = r; gSelAC = c; gSelER = r; gSelEC = c; gHasSel = NO; }
@@ -669,6 +681,7 @@ int main(int argc, const char *argv[]) {
             [win makeKeyAndOrderFront:nil];
             [win makeFirstResponder:gView];
             sendResize(gView);   // sync kryoterm's grid to the actual window size
+            sendScrollbackCap();
             glog("post-runloop: isKey=%d frIsView=%d", (int)[win isKeyWindow],
                  (int)([win firstResponder] == gView));
         });
@@ -680,7 +693,7 @@ int main(int argc, const char *argv[]) {
             addObserverForName:NSWindowDidBecomeKeyNotification object:win
                          queue:[NSOperationQueue mainQueue]
                     usingBlock:^(NSNotification *_n){
-                        loadConfig(); applyFont(); applyColors(); restartBlink(); sendResize(gView);
+                        loadConfig(); applyFont(); applyColors(); restartBlink(); sendResize(gView); sendScrollbackCap();
                     }];
 
         Reader *r = [[Reader alloc] init];

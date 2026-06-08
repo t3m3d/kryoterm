@@ -85,6 +85,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
     let title = ""                        // window title (OSC 0/2 from the shell)
     let scrollback = ""                   // history lines that scrolled off the top
     let scrollOff = 0                     // view offset (lines up from the bottom; 0=live)
+    let sbCap = 2000                      // scrollback line cap (shim sets via "L,n")
     let findQuery = ""                    // active find-in-scrollback query
     let findIdx = 0                       // which match (0 = most recent), wraps
     let findResult = "-1,-1,-1,0,0"           // matchRow,matchCol,matchLen for the shim to highlight
@@ -141,6 +142,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
                         if cmd == "N" { findIdx = findIdx + 1  dirty = 1  quiet = 2 }            // next match
                         if cmd == "P" { findIdx = findIdx - 1  dirty = 1  quiet = 2 }            // prev match
                         if cmd == "X" { findQuery = ""  findResult = "-1,-1,-1,0,0"  scrollOff = 0  dirty = 1  quiet = 2 }
+                        if cmd == "L" { let nl2 = toInt(args)  if nl2 >= 100 { sbCap = nl2 } }   // scrollback cap
                         if cmd == "F" || cmd == "N" || cmd == "P" {
                             let res = gridFind(scrollback, gridRender(st, cols, rows), rows, findQuery, findIdx)
                             let c1 = indexOf(res, ",")
@@ -174,8 +176,8 @@ func kryoterm_interactive(shellPath, cols, rows) {
                     scrollback = scrollback + sc
                     if scrollOff > 0 { scrollOff = scrollOff + lineCount(sc) }  // keep view put
                     let lc = lineCount(scrollback)
-                    if lc > 2500 {                              // trim history to ~2000 lines
-                        let drop = lc - 2000
+                    if lc > sbCap + 500 {                       // trim history back to sbCap
+                        let drop = lc - sbCap
                         let p = 0
                         let seen = 0
                         while seen < drop && p < len(scrollback) {
@@ -183,7 +185,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
                             p = p + 1
                         }
                         scrollback = substring(scrollback, p, len(scrollback))
-                        if scrollOff > 2000 { scrollOff = 2000 }
+                        if scrollOff > sbCap { scrollOff = sbCap }
                     }
                 }
             }
