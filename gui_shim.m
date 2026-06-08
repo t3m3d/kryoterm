@@ -789,6 +789,8 @@ static WTComposer *gWT;
 - (void)zoomIn:(id)s     { gFontSize += 1; applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
 - (void)zoomOut:(id)s    { if (gFontSize > 7) gFontSize -= 1; applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
 - (void)zoomActual:(id)s { loadConfig(); applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
+- (void)openHelpPage:(id)s { [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://krypton-lang.org/kryoterm.html"]]; }
+- (void)openGitHub:(id)s   { [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/t3m3d/kryoterm"]]; }
 @end
 
 static Controller *gController;
@@ -885,8 +887,16 @@ static void buildMenu(void) {
     [winMenu addItemWithTitle:@"Bring All to Front" action:@selector(arrangeInFront:) keyEquivalent:@""];
     [winMenu addItem:[NSMenuItem separatorItem]];   // macOS appends the open-window list below this
     [winItem setSubmenu:winMenu];
+    // Help menu (macOS prepends a search field automatically).
+    NSMenuItem *helpItem = [[NSMenuItem alloc] init]; [mainMenu addItem:helpItem];
+    NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
+    mi=[helpMenu addItemWithTitle:@"kryoterm Help" action:@selector(openHelpPage:) keyEquivalent:@"?"]; mi.target=gController;
+    [helpMenu addItem:[NSMenuItem separatorItem]];
+    mi=[helpMenu addItemWithTitle:@"kryoterm on GitHub" action:@selector(openGitHub:) keyEquivalent:@""]; mi.target=gController;
+    [helpItem setSubmenu:helpMenu];
     [NSApp setMainMenu:mainMenu];
     [NSApp setWindowsMenu:winMenu];
+    [NSApp setHelpMenu:helpMenu];
 }
 
 // ---- blink timer (shared) -------------------------------------------------
@@ -905,7 +915,7 @@ int main(int argc, const char *argv[]) {
                kp0 = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]); }
 
         setenv("TERM_PROGRAM", "kryoterm", 1);
-        setenv("TERM_PROGRAM_VERSION", "1.6", 1);
+        setenv("TERM_PROGRAM_VERSION", "1.7", 1);
         setenv("TERM", "xterm-256color", 1);
         const char *curPath = getenv("PATH");
         if (!curPath || !strstr(curPath, "/opt/homebrew")) {
