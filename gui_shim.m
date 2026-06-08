@@ -429,9 +429,26 @@ static void sendScrollbackCap(void) {
             NSRectFill(NSMakeRect(kPadX + a*gCharW, kPadY + r*gLineH, (b-a)*gCharW, gLineH));
         }
     }
-    // find-match highlight
+    // find: faint highlight on every visible occurrence (shim has the query + text)
+    if (!gSearchField.hidden && gSearchField.stringValue.length && self.attr) {
+        NSString *q = gSearchField.stringValue;
+        NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
+        [[NSColor colorWithCalibratedRed:0.96 green:0.80 blue:0.25 alpha:0.20] set];
+        for (int r = 0; r < (int)lines.count && r < gRows; r++) {
+            NSString *ln = lines[r];
+            NSRange sr = NSMakeRange(0, ln.length);
+            while (sr.length) {
+                NSRange m = [ln rangeOfString:q options:0 range:sr];   // case-sensitive, matches the bridge
+                if (m.location == NSNotFound) break;
+                NSRectFill(NSMakeRect(kPadX + m.location*gCharW, kPadY + r*gLineH, m.length*gCharW, gLineH));
+                NSUInteger nx = m.location + m.length;
+                sr = NSMakeRange(nx, ln.length - nx);
+            }
+        }
+    }
+    // current match — bright (position from the bridge)
     if (gMatchRow >= 0 && gMatchLen > 0) {
-        [[NSColor colorWithCalibratedRed:0.96 green:0.80 blue:0.25 alpha:0.5] set];
+        [[NSColor colorWithCalibratedRed:0.96 green:0.80 blue:0.25 alpha:0.55] set];
         NSRectFill(NSMakeRect(kPadX + gMatchCol*gCharW, kPadY + gMatchRow*gLineH, gMatchLen*gCharW, gLineH));
     }
     // scroll-position thumb on the right edge (only while viewing history)
