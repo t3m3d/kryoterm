@@ -310,8 +310,26 @@ static void sendResize(NSView *v) {
     int L = (r < (int)lines.count) ? (int)[lines[r] length] : 0;
     gSelAR = r; gSelAC = 0; gSelER = r; gSelEC = L; gHasSel = (L > 0);
 }
+- (void)openUrlAtRow:(int)r col:(int)c {
+    NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
+    if (r < 0 || r >= (int)lines.count) return;
+    NSString *ln = lines[r]; int L = (int)ln.length;
+    if (c >= L) return;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    int a = c, b = c;
+    while (a > 0 && ![ws characterIsMember:[ln characterAtIndex:a-1]]) a--;
+    while (b < L && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
+    NSString *tok = [ln substringWithRange:NSMakeRange(a, b-a)];
+    NSCharacterSet *trail = [NSCharacterSet characterSetWithCharactersInString:@".,;:)]}>\"'"];
+    while (tok.length && [trail characterIsMember:[tok characterAtIndex:tok.length-1]]) tok = [tok substringToIndex:tok.length-1];
+    NSString *url = nil;
+    if ([tok hasPrefix:@"http://"] || [tok hasPrefix:@"https://"] || [tok hasPrefix:@"file://"]) url = tok;
+    else if ([tok hasPrefix:@"www."]) url = [@"https://" stringByAppendingString:tok];
+    if (url) { NSURL *u = [NSURL URLWithString:url]; if (u) [[NSWorkspace sharedWorkspace] openURL:u]; }
+}
 - (void)mouseDown:(NSEvent *)e {
     int r, c; [self pointToCell:e row:&r col:&c];
+    if (e.modifierFlags & NSEventModifierFlagCommand) { [self openUrlAtRow:r col:c]; return; }  // ⌘-click opens URLs
     if (e.clickCount == 2)      [self selectWordRow:r col:c];   // word
     else if (e.clickCount == 3) [self selectLineRow:r];         // line
     else { gSelAR = r; gSelAC = c; gSelER = r; gSelEC = c; gHasSel = NO; }
