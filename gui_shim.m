@@ -353,7 +353,13 @@ static void sendScrollbackCap(void) {
     NSString *url = nil;
     if ([tok hasPrefix:@"http://"] || [tok hasPrefix:@"https://"] || [tok hasPrefix:@"file://"]) url = tok;
     else if ([tok hasPrefix:@"www."]) url = [@"https://" stringByAppendingString:tok];
-    if (url) { NSURL *u = [NSURL URLWithString:url]; if (u) [[NSWorkspace sharedWorkspace] openURL:u]; }
+    if (url) { NSURL *u = [NSURL URLWithString:url]; if (u) [[NSWorkspace sharedWorkspace] openURL:u]; return; }
+    // file path -> open in Finder/default app if it exists
+    if ([tok hasPrefix:@"/"] || [tok hasPrefix:@"~/"]) {
+        NSString *path = [tok stringByExpandingTildeInPath];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path])
+            [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path]];
+    }
 }
 - (void)mouseDown:(NSEvent *)e {
     int r, c; [self pointToCell:e row:&r col:&c];
