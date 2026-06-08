@@ -378,6 +378,17 @@ static void sendScrollbackCap(void) {
 - (void)otherMouseDown:(NSEvent *)e {       // middle-click pastes
     if (e.buttonNumber == 2) [self pasteClipboard];
 }
+// drag-and-drop files -> insert their (shell-quoted) paths
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)s { return NSDragOperationCopy; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)s {
+    NSArray *files = [[s draggingPasteboard] propertyListForType:NSFilenamesPboardType];
+    if (!files.count || gMaster < 0) return NO;
+    NSMutableString *out = [NSMutableString string];
+    for (NSString *f in files)
+        [out appendFormat:@"'%@' ", [f stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
+    const char *b = [out UTF8String]; write(gMaster, b, strlen(b));
+    return YES;
+}
 - (NSString *)selectedText {
     if (!gHasSel || !self.attr) return nil;
     NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
@@ -723,6 +734,7 @@ int main(int argc, const char *argv[]) {
 
         gView = [[KryptonView alloc] initWithFrame:frame];
         [gView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        [gView registerForDraggedTypes:@[NSFilenamesPboardType]];   // drag files -> paths
         [win setContentView:gView];
 
         // ⌘F search bar — top-right, hidden until opened, sticks to the corner.
