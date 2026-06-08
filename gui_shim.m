@@ -63,6 +63,7 @@ static int gCursorStyle = 0;             // 0 bar | 1 block | 2 underline
 static NSString *gFontName = @"JetBrainsMono Nerd Font Mono";
 static CGFloat gFontSize = 13;
 static CGFloat gOpacity = 1.0;           // window background opacity (text stays opaque)
+static CGFloat gLineSpacing = 0;         // extra px between rows
 static BOOL gCopyOnSelect = NO;          // auto-copy a selection on mouse-up
 static int gScrollbackLines = 2000;      // scrollback history cap
 
@@ -83,7 +84,7 @@ static void loadConfig(void) {
     gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
     gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
     gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;  gOpacity = 1.0;
-    kPadX = 6;  kPadY = 4;  gCopyOnSelect = NO;  gScrollbackLines = 2000;
+    kPadX = 6;  kPadY = 4;  gCopyOnSelect = NO;  gScrollbackLines = 2000;  gLineSpacing = 0;
     NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -111,7 +112,8 @@ static void loadConfig(void) {
            "opacity          = 1.0\n"
            "padding          = 6\n"
            "copy_on_select   = false        # auto-copy selection; middle-click pastes\n"
-           "scrollback_lines = 2000\n";
+           "scrollback_lines = 2000\n"
+           "line_spacing     = 0\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -133,6 +135,7 @@ static void loadConfig(void) {
         if ([k isEqualToString:@"padding"])     { CGFloat pd = atof(v.UTF8String); if (pd >= 0 && pd <= 40) { kPadX = pd; kPadY = pd; } continue; }
         if ([k isEqualToString:@"copy_on_select"]) { gCopyOnSelect = ([v hasPrefix:@"t"] || [v hasPrefix:@"1"] || [v hasPrefix:@"y"]); continue; }
         if ([k isEqualToString:@"scrollback_lines"]) { int n = atoi(v.UTF8String); if (n >= 100) gScrollbackLines = n; continue; }
+        if ([k isEqualToString:@"line_spacing"]) { CGFloat ls = atof(v.UTF8String); if (ls >= 0 && ls <= 20) gLineSpacing = ls; continue; }
         NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
         if      ([k isEqualToString:@"cursor_color"])     gCursorColor = c;
@@ -150,7 +153,7 @@ static void applyFont(void) {
          ?: [NSFont fontWithName:@"Menlo" size:gFontSize]
          ?: [NSFont userFixedPitchFontOfSize:gFontSize];
     gCharW = gFont.maximumAdvancement.width;
-    gLineH = [[NSLayoutManager new] defaultLineHeightForFont:gFont];
+    gLineH = [[NSLayoutManager new] defaultLineHeightForFont:gFont] + gLineSpacing;
 }
 
 // xterm256(n) — the xterm 256-colour palette index -> NSColor. term.k re-emits
@@ -221,6 +224,11 @@ static NSAttributedString *parseFrame(NSData *data) {
     }
     if (1) {
         appendRun(out, b, runStart, i - runStart, curFg, curBg, font);
+    }
+    if (gLineSpacing > 0 && out.length) {
+        NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+        ps.lineSpacing = gLineSpacing;   // keep text rows in step with gLineH
+        [out addAttribute:NSParagraphStyleAttributeName value:ps range:NSMakeRange(0, out.length)];
     }
     return out;
 }
