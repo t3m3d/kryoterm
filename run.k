@@ -82,6 +82,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
     let dirty = 0
     let quiet = 0
     let pending = ""                      // partial escape/UTF-8 carried between reads
+    let title = ""                        // window title (OSC 0/2 from the shell)
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
@@ -117,6 +118,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
             // last COMPLETE unit and carry the remainder to the next read, or the
             // grid corrupts (e.g. kryofetch's colour/box-drawing output).
             let chunk = pending + out
+            title = oscTitle(chunk, title)
             let cut = gridSafeLen(chunk)
             if cut > 0 { st = gridFeed(st, substring(chunk, 0, cut), cols, rows) }
             pending = substring(chunk, cut, len(chunk))
@@ -134,7 +136,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
             // frame = SOH cursor("row,col") SOH grid-text \f. The shim strips the
             // SOH-delimited cursor header and draws a cursor there.
             let soh = fromCharCode(1)
-            let frame = soh + gridCursor(st, cols, rows) + soh + gridRender(st, cols, rows) + ff
+            let frame = soh + gridCursor(st, cols, rows) + "," + title + soh + gridRender(st, cols, rows) + ff
             // write() to a pty can be PARTIAL (small kernel buffer); loop or the
             // frame (and its terminating \f) gets truncated and the shim never
             // sees a complete frame.

@@ -371,7 +371,7 @@ static void restartBlink(void) {
                 NSData *snapshot = [frame copy];
                 nframes++;
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    // Strip the SOH-delimited cursor header (SOH "row,col" SOH ...).
+                    // Strip the SOH-delimited header: SOH "row,col,title" SOH ...
                     NSData *body = snapshot;
                     const unsigned char *p = snapshot.bytes;
                     NSUInteger len = snapshot.length;
@@ -379,13 +379,17 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            int cr = 0, cc = 0, sawComma = 0;
+                            int cr = 0, cc = 0, field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') sawComma = 1;
+                                if (p[m] == ',') { field++; if (field == 2) { titleStart = m+1; break; } }
                                 else if (p[m] >= '0' && p[m] <= '9')
-                                    { if (sawComma) cc = cc*10 + (p[m]-'0'); else cr = cr*10 + (p[m]-'0'); }
+                                    { if (field == 0) cr = cr*10 + (p[m]-'0'); else if (field == 1) cc = cc*10 + (p[m]-'0'); }
                             }
                             gCurRow = cr; gCurCol = cc;
+                            if (titleStart && titleStart < k) {
+                                NSString *t = [[NSString alloc] initWithBytes:p+titleStart length:k-titleStart encoding:NSUTF8StringEncoding];
+                                if (t.length) [gWin setTitle:t];
+                            }
                             body = [snapshot subdataWithRange:NSMakeRange(k+1, len-(k+1))];
                         }
                     }

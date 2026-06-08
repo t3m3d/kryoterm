@@ -475,6 +475,23 @@ func gridSafeLen(s) {
     emit utfCut
 }
 
+// oscTitle(s, old) — the window title from an OSC 0/2 (`ESC]0;…BEL` / `ESC]2;…`)
+// in s, else `old`. Used by the bridge to track the shell-set title.
+func oscTitle(s, old) {
+    let e = fromCharCode(27)
+    let m = indexOf(s, e + "]0;")
+    if m < 0 { m = indexOf(s, e + "]2;") }
+    if m < 0 { emit old }
+    let rest = substring(s, m + 4, len(s))   // after "ESC]N;"
+    let bel = indexOf(rest, fromCharCode(7))  // BEL terminator
+    let st = indexOf(rest, e + fromCharCode(92))   // or ST (ESC \)
+    let stop = bel
+    if stop < 0 { stop = st }
+    else { if st >= 0 && st < stop { stop = st } }
+    if stop < 0 { emit old }                  // incomplete -> keep old
+    emit substring(rest, 0, stop)
+}
+
 // gridCursor(state, cols, rows) — the cursor position as "row,col" (0-based).
 func gridCursor(state, cols, rows) {
     let total = cols * rows
