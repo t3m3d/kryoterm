@@ -421,6 +421,26 @@ void closePaneView(KryptonView *pane);   // fwd (defined after the class)
     if (t.length && _master >= 0) { const char *b=[t UTF8String];
         if (_pasteMode) write(_master,"\033[200~",6); write(_master,b,strlen(b)); if (_pasteMode) write(_master,"\033[201~",6); }
 }
+
+// --- standard Edit-menu actions (routed via responder chain to the focused pane) ---
+- (void)copy:(id)s { [self copySelection]; }
+- (void)paste:(id)s { [self pasteClipboard]; }
+- (void)pasteSelection:(id)s {                      // paste the highlighted terminal selection to the shell
+    NSString *t = [self selectedText];
+    if (t.length && _master >= 0) { const char *b=[t UTF8String];
+        if (_pasteMode) write(_master,"\033[200~",6); write(_master,b,strlen(b)); if (_pasteMode) write(_master,"\033[201~",6); }
+}
+- (void)selectAll:(id)s { _selAR=0; _selAC=0; _selER=_rows-1; _selEC=_cols; _hasSel=YES; [self setNeedsDisplay:YES]; }
+- (void)performFind:(id)s { [self openSearch]; }
+- (void)insertText:(id)s {                          // emoji picker / dictation insert here
+    NSString *str = [s isKindOfClass:[NSAttributedString class]] ? [(NSAttributedString *)s string] : (NSString *)s;
+    if (_master >= 0 && str.length) { const char *b=[str UTF8String]; write(_master, b, strlen(b)); }
+}
+- (BOOL)validateMenuItem:(NSMenuItem *)mi {
+    SEL a = mi.action;
+    if (a == @selector(copy:) || a == @selector(pasteSelection:)) return _hasSel;
+    return YES;
+}
 - (void)openUrlAtRow:(int)r col:(int)c {
     NSArray<NSString *> *L = [self.attr.string componentsSeparatedByString:@"\n"];
     if (r<0 || r>=(int)L.count) return;
@@ -708,6 +728,31 @@ static void buildMenu(void) {
     mi=[fileMenu addItemWithTitle:@"Close Window" action:@selector(closeWindow:) keyEquivalent:@"w"]; mi.keyEquivalentModifierMask=(NSEventModifierFlagCommand|NSEventModifierFlagShift); mi.target=gController;
     mi=[fileMenu addItemWithTitle:@"Close All Windows" action:@selector(closeAll:) keyEquivalent:@"w"]; mi.keyEquivalentModifierMask=(NSEventModifierFlagCommand|NSEventModifierFlagOption); mi.target=gController;
     [fileItem setSubmenu:fileMenu];
+    // Edit menu — actions route through the responder chain to the focused pane.
+    NSMenuItem *editItem = [[NSMenuItem alloc] init]; [mainMenu addItem:editItem];
+    NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+    [editMenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+    mi=[editMenu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"z"]; mi.keyEquivalentModifierMask=(NSEventModifierFlagCommand|NSEventModifierFlagShift);
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+    [editMenu addItemWithTitle:@"Paste Selection" action:@selector(pasteSelection:) keyEquivalent:@""];
+    [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    [editMenu addItemWithTitle:@"Find" action:@selector(performFind:) keyEquivalent:@"f"];
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *wt = [editMenu addItemWithTitle:@"Writing Tools" action:NULL keyEquivalent:@""];
+    NSMenu *wtSub = [[NSMenu alloc] initWithTitle:@"Writing Tools"];
+    [[wtSub addItemWithTitle:@"(coming soon)" action:NULL keyEquivalent:@""] setEnabled:NO];
+    [wt setSubmenu:wtSub];
+    NSMenuItem *af = [editMenu addItemWithTitle:@"AutoFill" action:NULL keyEquivalent:@""];
+    NSMenu *afSub = [[NSMenu alloc] initWithTitle:@"AutoFill"];
+    [[afSub addItemWithTitle:@"(coming soon)" action:NULL keyEquivalent:@""] setEnabled:NO];
+    [af setSubmenu:afSub];
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    [editMenu addItemWithTitle:@"Start Dictation…" action:@selector(startDictation:) keyEquivalent:@""];
+    [editMenu addItemWithTitle:@"Emoji & Symbols" action:@selector(orderFrontCharacterPalette:) keyEquivalent:@""];
+    [editItem setSubmenu:editMenu];
     // Window menu (native — gives tab navigation: Show Next/Previous Tab, etc.)
     NSMenuItem *winItem = [[NSMenuItem alloc] init]; [mainMenu addItem:winItem];
     NSMenu *winMenu = [[NSMenu alloc] initWithTitle:@"Window"];
