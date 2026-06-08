@@ -402,6 +402,26 @@ static void sendScrollbackCap(void) {
     [[(gCurBg ?: [NSColor blackColor]) colorWithAlphaComponent:gOpacity] set];
     NSRectFill(self.bounds);
     if (self.attr) [self.attr drawAtPoint:NSMakePoint(kPadX, kPadY)];
+    // underline URLs (clickable via ⌘-click)
+    if (self.attr) {
+        NSArray<NSString *> *lines = [self.attr.string componentsSeparatedByString:@"\n"];
+        NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+        [[NSColor colorWithCalibratedRed:0.40 green:0.62 blue:0.95 alpha:0.7] set];
+        for (int r = 0; r < (int)lines.count && r < gRows; r++) {
+            NSString *ln = lines[r];
+            NSRange sr = NSMakeRange(0, ln.length);
+            while (sr.length) {
+                NSRange m = [ln rangeOfString:@"http" options:0 range:sr];
+                if (m.location == NSNotFound) break;
+                NSUInteger a = m.location, b = a;
+                while (b < ln.length && ![ws characterIsMember:[ln characterAtIndex:b]]) b++;
+                NSString *tok = [ln substringWithRange:NSMakeRange(a, b-a)];
+                if ([tok hasPrefix:@"http://"] || [tok hasPrefix:@"https://"])
+                    NSRectFill(NSMakeRect(kPadX + a*gCharW, kPadY + r*gLineH + gLineH - 1.5, (b-a)*gCharW, 1.0));
+                sr = NSMakeRange(b, ln.length - b);
+            }
+        }
+    }
     // cursor: filled (per style, blinks) when focused; hollow outline when not.
     if (gCurRow < gRows) {
         NSColor *cc = gCursorColor ?: [NSColor whiteColor];
