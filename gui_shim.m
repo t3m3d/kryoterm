@@ -809,6 +809,11 @@ int main(int argc, const char *argv[]) {
                         loadConfig(); applyFont(); applyColors(); restartBlink(); sendResize(gView); sendScrollbackCap();
                     }];
 
+        // ⌘Q / terminate: doesn't return from [NSApp run], so reap the child here.
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSApplicationWillTerminateNotification object:nil queue:nil
+                    usingBlock:^(NSNotification *_n){ if (gChild > 0) kill(gChild, SIGTERM); }];
+
         Reader *r = [[Reader alloc] init];
         [NSThread detachNewThreadSelector:@selector(readLoop) toTarget:r withObject:nil];
 
