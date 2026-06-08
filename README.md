@@ -1,77 +1,98 @@
 # kryoterm — Krypton-native terminal
 
-A terminal emulator written in pure **Krypton + KryptScript**, no C, no
-C++, no Qt, no GTK, no libX11/libxcb. The window comes from
-[`stdlib/x11.k`](https://github.com/t3m3d/krypton/blob/main/stdlib/x11.k)
-(the Krypton X11 wire-protocol client) and the binary is a static,
-syscall-only ELF — just like every other Krypton program.
+A terminal emulator whose **engine is pure Krypton** — no C, no C++, no Qt/GTK.
+The shell, the pseudo-terminal, and the ANSI/grid renderer are all native
+Krypton (macho backend `svc` syscall builtins + `term.k`). On macOS a thin,
+**temporary** Obj-C/Cocoa shim opens the window and forwards keystrokes — the one
+thing the Krypton backend can't do yet (no `objc_msgSend` FFI). The shim does
+*only* window + draw + keys; everything terminal lives in Krypton.
 
-**Status: phase 3 — live PTY engine (macOS).** kryoterm spawns a real
-shell on a pseudo-terminal, runs commands, and renders the live output
-through a pure-Krypton grid driver. The engine is **native syscall
-builtins in the Krypton macho backend** — `ptyMaster`/`ptySlaveName`/
-`ptyForkExec`, `fdRead`/`fdWrite`/`fdClose`, `fdSetNonblock`, `sleepUs` —
-no C, no libc, just `svc` syscalls (open `/dev/ptmx`, grant/unlock,
-fork, setsid, TIOCSCTTY, dup2, execve with inherited env). Verified:
-`uname -srm` → `Darwin 25.5.0 arm64`, `pwd`, `echo` all execute and
-render. Remaining for a windowed terminal: the GUI surface (objc FFI),
-a UTF-8-aware grid, and a live keystroke loop.
+**Status: working macOS terminal.** Live `/bin/zsh` (sources your `~/.zshrc` —
+powerlevel10k, history, aliases), full colour incl. truecolor, scrollback,
+selection/copy, find, resize reflow, configurable theme/font/cursor.
+
+```
+ keyboard ─▶ Obj-C shim ─(pipe)▶ kryoterm -i ─(pty)▶ /bin/zsh
+ window   ◀─ Obj-C shim ◀(frames)─ kryoterm -i ◀──────  (term.k grid)
+```
+
+## Run
+
+```bash
+./gui.sh          # builds the shim if needed, launches the windowed terminal
+```
+
+`gui.sh` runs `kryoterm-gui` (the Obj-C shim) against the pure-Krypton
+`kryoterm` binary. To rebuild the pieces:
+
+```bash
+./build_gui.sh    # clang -framework Cocoa -fobjc-arc  gui_shim.m -o kryoterm-gui
+# kryoterm itself is built from run.k with the Krypton macho driver (kcc --native)
+```
+
+macOS + Apple Silicon. A [JetBrainsMono Nerd Font](https://www.nerdfonts.com/)
+is recommended so powerline/icon glyphs render (configurable).
+
+## Engine (pure Krypton)
+
+- **`term.k`** — incremental ANSI grid driver. Packed-string state (char +
+  fg/bg attr planes + cursor + scrollback). Handles CUP/CUU/…/EL/ED (param-aware),
+  ESC7/8 + `ESC[s/u` cursor save/restore, deferred wrap (auto-margin), SGR
+  256-colour **and** truecolor (`48;2;r;g;b` → nearest xterm-256), multi-byte
+  UTF-8 single-column cells, scroll with scrollback capture, OSC 0/2 title,
+  find (`gridFind`).
+- **`run.k -i`** — interactive bridge. Spawns the shell on a pty (native
+  `ptyMaster`/`ptyForkExec`/`fdRead`/`fdWrite`/`fdSetNonblock`/`sleepUs`), feeds
+  output through the grid, coalesces settled frames, and emits each as
+  `SOH header SOH grid \f`. Reads keystrokes + control markers (resize / scroll /
+  clear / find) back on stdin.
+- **`pty.k`** — pty wrapper. **`ansi.k`** — standalone `stripAnsi`.
+
+The shim (`gui_shim.m`) is explicitly temporary — delete it once the Krypton
+macho backend gains `objc_msgSend`/AppKit FFI.
+
+## Shortcuts
+
+| Key | Action |
+|---|---|
+| ⌘C / ⌘V | copy selection / bracketed paste |
+| ⌘F · ⌘G · ⌘⇧G | find in scrollback · next · prev |
+| ⌘K | clear screen + scrollback |
+| ⌘N | new window |
+| ⌘+ / ⌘− / ⌘0 | font zoom in / out / reset |
+| ⌘↑ / ⌘↓ | scrollback page up / down |
+| ⌘Home / ⌘End | scrollback top / back to live |
+| scroll wheel | scrollback |
+| drag · 2-click · 3-click | select · word · line |
+| ⌘-click · middle-click | open URL · paste |
+
+## Config
+
+`~/.config/kryoterm/config` (auto-created, hot-reloads on window focus):
+
+```ini
+titlebar_light   = #2b2b2b      # dark grey in light mode, …
+titlebar_dark    = #000000      # … black in dark mode (follows system appearance)
+background_light = #2b2b2b
+background_dark  = #000000
+cursor_blink_ms  = 530          # 0 = steady
+cursor_color     = #d8dad4
+cursor_style     = bar          # bar | block | underline
+font_family      = JetBrainsMono Nerd Font Mono
+font_size        = 13
+opacity          = 1.0          # 0.2–1.0, translucent bg (text stays opaque)
+padding          = 6
+copy_on_select   = false        # auto-copy selection; middle-click pastes
+```
 
 ## Why this exists
 
-`terk` (the sibling project) is a perfectly good Qt6/C++ terminal — but
-it pulls in Qt6, cmake, a C++ compiler, and an entire desktop GUI stack
-just to draw text in a box. The whole point of Krypton is to escape
-that. Once `stdlib/x11.k` ships Phase C (drawing), kryoterm can draw the
-same text in the same box with **zero non-Krypton dependencies** at
-runtime and only `krypton` at build time. That's the trajectory.
-
-When kryoterm reaches feature parity with terk's "render bytes to a
-window" core, terk becomes optional rather than primary.
-
-## Phases
-
-| Phase | What it does | Status |
-|---|---|---|
-| 0 | Spawn child via `shellRun`, echo output | ✅ done |
-| 3 | **Real PTY** — spawn a shell, read/write, drive interactive programs | ✅ **done (macOS)** — native pty/fd builtins in `macho_arm64_self.k` |
-| 4 | ANSI handling + grid/cursor + SGR colour + UTF-8 + scroll | ✅ done (`ansi.k` + `term.k`: fg+bg colour, multi-byte UTF-8 cells, scroll-on-overflow) |
-| 1/2/5 | GUI window: draw frames + live keyboard | ✅ built — `./gui.sh` runs `kryoterm-gui`, a temp Obj-C shim that forkpty-spawns the pure-Krypton `kryoterm -i` bridge, draws its grid frames, and forwards keystrokes. Engine stays 100% Krypton; shim only does window+draw+keys (objc FFI gap). *Visual/keyboard needs a human to confirm.* |
-
-## Build
-
-```bash
-./build_linux.sh           # builds ./kryoterm against $KRYPTON_ROOT/kcc.sh
-./build_linux.sh --run     # build then run once
-```
-
-Set `KRYPTON_ROOT=/path/to/krypton` if your krypton checkout isn't at
-`../krypton`. No gcc / cmake / clang in the build path — kcc handles
-everything.
-
-Arch users: `makepkg -si` once the PKGBUILD lands.
-
-## Code layout
-
-- [`run.k`](run.k) — the compiled core. Krypton, not KryptScript. This
-  is where the X11 wire calls, PTY syscalls, and render loop will live
-  once those phases land.
-- [`run.ks`](run.ks) — KryptScript entry. Higher-level glue:
-  command-line parsing, config file loading, theme switching. Calls
-  into the compiled core.
-- `build_linux.sh` — kcc wrapper. The only shell script in the repo.
-
-The split mirrors yubikrypt's convention: the heavy lifting is `.k`,
-the user-facing scripting is `.ks`.
-
-## What kryoterm is NOT
-
-- A drop-in replacement for terk **today**. It will be after Phase 2/3.
-- A serial console / SSH client / multiplexer. Just a terminal emulator
-  speaking VT100-ish to a local child process.
-- Going to support every TUI app from day one. ncurses programs need a
-  real PTY (Phase 3); shells need ANSI handling (Phase 4). Until then
-  it's a pretty echo box.
+Krypton's whole point is escaping the C/C++/Qt stack — static, syscall-only
+binaries with zero non-Krypton runtime deps. kryoterm proves a *terminal* can be
+built that way: the engine already is. The only non-Krypton code is the macOS
+window shim, kept deliberately small and marked for deletion once AppKit FFI
+lands in the backend. (A Linux window path — `stdlib/x11.k`/Wayland — is the
+other route to closing that gap.)
 
 ## License
 
