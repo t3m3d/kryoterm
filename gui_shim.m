@@ -876,6 +876,14 @@ static void buildMenu(void) {
     NSMenu *winMenu = [[NSMenu alloc] initWithTitle:@"Window"];
     [winMenu addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
     [winMenu addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
+    [winMenu addItem:[NSMenuItem separatorItem]];
+    mi=[winMenu addItemWithTitle:@"Show Next Tab" action:@selector(selectNextTab:) keyEquivalent:@"\t"]; mi.keyEquivalentModifierMask=NSEventModifierFlagControl;
+    mi=[winMenu addItemWithTitle:@"Show Previous Tab" action:@selector(selectPreviousTab:) keyEquivalent:@"\t"]; mi.keyEquivalentModifierMask=(NSEventModifierFlagControl|NSEventModifierFlagShift);
+    [winMenu addItemWithTitle:@"Move Tab to New Window" action:@selector(moveTabToNewWindow:) keyEquivalent:@""];
+    [winMenu addItemWithTitle:@"Merge All Windows" action:@selector(mergeAllWindows:) keyEquivalent:@""];
+    [winMenu addItem:[NSMenuItem separatorItem]];
+    [winMenu addItemWithTitle:@"Bring All to Front" action:@selector(arrangeInFront:) keyEquivalent:@""];
+    [winMenu addItem:[NSMenuItem separatorItem]];   // macOS appends the open-window list below this
     [winItem setSubmenu:winMenu];
     [NSApp setMainMenu:mainMenu];
     [NSApp setWindowsMenu:winMenu];
@@ -897,7 +905,7 @@ int main(int argc, const char *argv[]) {
                kp0 = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]); }
 
         setenv("TERM_PROGRAM", "kryoterm", 1);
-        setenv("TERM_PROGRAM_VERSION", "1.5", 1);
+        setenv("TERM_PROGRAM_VERSION", "1.6", 1);
         setenv("TERM", "xterm-256color", 1);
         const char *curPath = getenv("PATH");
         if (!curPath || !strstr(curPath, "/opt/homebrew")) {
