@@ -511,6 +511,11 @@ static void sendScrollbackCap(void) {
         if (e.keyCode == 115) { write(gMaster, "\036U,99999\036", 9); return; }   // ⌘Home -> top of history
         if (e.keyCode == 119) { write(gMaster, "\036D,99999\036", 9); return; }   // ⌘End  -> back to live
     }
+    if ((e.modifierFlags & NSEventModifierFlagShift) && (e.keyCode == 116 || e.keyCode == 121)) {
+        int page = gRows > 2 ? gRows - 2 : 1; char nb[24];   // ⇧PageUp/PageDown scrollback
+        snprintf(nb, sizeof nb, "\036%c,%d\036", e.keyCode == 116 ? 'U' : 'D', page);
+        write(gMaster, nb, strlen(nb)); return;
+    }
     // Special keys -> ANSI/VT sequences (arrows for history/completion, etc.).
     // NSEvent.characters returns private-use function-key codepoints for these,
     // which the shell can't use, so map by keyCode instead.
