@@ -14,6 +14,8 @@
 // Build: ./build_gui.sh
 
 #import <Cocoa/Cocoa.h>
+#import <Contacts/Contacts.h>
+#import <ContactsUI/ContactsUI.h>
 #import <util.h>
 #import <termios.h>
 #import <unistd.h>
@@ -682,6 +684,69 @@ static void splitActive(BOOL vertical, BOOL newAfter) {
     dispatch_async(dispatch_get_main_queue(), ^{ for (KryptonView *p in gPanes) if (p.window == w) [p sendResize]; });
 }
 
+// ---- Contacts AutoFill (out-of-process system picker; no permission prompt) --
+@interface ContactsHelper : NSObject <CNContactPickerDelegate>
+@property (weak) KryptonView *target;
+@end
+@implementation ContactsHelper
+- (void)contactPicker:(CNContactPicker *)p didSelectContactProperty:(CNContactProperty *)prop {
+    id v = prop.value; NSString *s = nil;
+    if ([v isKindOfClass:[NSString class]]) s = v;
+    else if ([v isKindOfClass:[CNPhoneNumber class]]) s = [(CNPhoneNumber *)v stringValue];
+    else if (v) s = [v description];
+    if (s.length && self.target) [self.target insertText:s];
+}
+- (void)contactPicker:(CNContactPicker *)p didSelectContact:(CNContact *)c {
+    NSString *n = [[NSString stringWithFormat:@"%@ %@", c.givenName, c.familyName]
+                    stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (n.length && self.target) [self.target insertText:n];
+}
+@end
+static ContactsHelper *gContacts;
+static CNContactPicker *gPicker;
+
+// ---- Writing Tools composer (NSTextView has native Writing Tools; run on the
+//      terminal selection, then insert the result to the shell) ----------------
+@interface WTComposer : NSObject
+@property (strong) NSPanel *panel;
+@property (strong) NSTextView *tv;
+@property (weak) KryptonView *target;
+@end
+@implementation WTComposer
+- (void)showFor:(KryptonView *)pane seed:(NSString *)seed {
+    self.target = pane;
+    NSPanel *p = [[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,540,380)
+        styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+        backing:NSBackingStoreBuffered defer:NO];
+    [p setTitle:@"Writing Tools"];
+    NSScrollView *sv = [[NSScrollView alloc] initWithFrame:NSMakeRect(12,52,516,316)];
+    sv.hasVerticalScroller = YES; sv.borderType = NSBezelBorder;
+    sv.autoresizingMask = (NSViewWidthSizable|NSViewHeightSizable);
+    NSTextView *tv = [[NSTextView alloc] initWithFrame:sv.bounds];
+    tv.autoresizingMask = NSViewWidthSizable; tv.richText = NO;
+    tv.string = seed ?: @"";
+    tv.font = [NSFont systemFontOfSize:13];
+    if (@available(macOS 15.2, *)) tv.writingToolsBehavior = NSWritingToolsBehaviorComplete;
+    sv.documentView = tv;
+    [p.contentView addSubview:sv];
+    NSButton *wtb = [NSButton buttonWithTitle:@"Writing Tools…" target:self action:@selector(applyWT:)];
+    wtb.frame = NSMakeRect(12,12,150,30); wtb.autoresizingMask = (NSViewMaxXMargin|NSViewMaxYMargin);
+    [p.contentView addSubview:wtb];
+    NSButton *cancel = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancel:)];
+    cancel.frame = NSMakeRect(316,12,96,28); cancel.autoresizingMask = (NSViewMinXMargin|NSViewMaxYMargin);
+    [p.contentView addSubview:cancel];
+    NSButton *ins = [NSButton buttonWithTitle:@"Insert to Shell" target:self action:@selector(insert:)];
+    ins.frame = NSMakeRect(416,12,112,30); ins.keyEquivalent = @"\r"; ins.autoresizingMask = (NSViewMinXMargin|NSViewMaxYMargin);
+    [p.contentView addSubview:ins];
+    self.panel = p; self.tv = tv;
+    [p center]; [p makeKeyAndOrderFront:nil]; [p makeFirstResponder:tv];
+}
+- (void)applyWT:(id)s { if (@available(macOS 15.2, *)) [self.tv showWritingTools:nil]; else NSBeep(); }
+- (void)insert:(id)s { if (self.target && self.tv.string.length) [self.target insertText:self.tv.string]; [self.panel close]; self.panel=nil; }
+- (void)cancel:(id)s { [self.panel close]; self.panel=nil; }
+@end
+static WTComposer *gWT;
+
 // ---- menu controller ------------------------------------------------------
 @interface Controller : NSObject @end
 @implementation Controller
@@ -699,6 +764,28 @@ static void splitActive(BOOL vertical, BOOL newAfter) {
 - (void)closePane:(id)s  { KryptonView *p = activePane(); if (p) closePaneView(p); }
 - (void)closeWindow:(id)s { [[NSApp keyWindow] performClose:nil]; }
 - (void)closeAll:(id)s   { for (NSWindow *w in [NSApp.windows copy]) [w close]; }
+- (void)openWritingTools:(id)s {
+    KryptonView *p = activePane(); if (!p) return;
+    NSString *seed = [p selectedText] ?: @"";
+    if (!gWT) gWT = [[WTComposer alloc] init];
+    [gWT showFor:p seed:seed];
+}
+- (void)autoFillContacts:(id)s {
+    KryptonView *p = activePane(); if (!p) return;
+    if (!gContacts) gContacts = [[ContactsHelper alloc] init];
+    gContacts.target = p;
+    gPicker = [[CNContactPicker alloc] init];
+    gPicker.delegate = gContacts;
+    gPicker.displayedKeys = @[CNContactEmailAddressesKey, CNContactPhoneNumbersKey, CNContactPostalAddressesKey];
+    NSRect r = NSMakeRect(NSMidX(p.bounds), NSMidY(p.bounds), 1, 1);
+    [gPicker showRelativeToRect:r ofView:p preferredEdge:NSMinYEdge];
+}
+- (void)autoFillPasswords:(id)s {
+    NSWorkspace *ws = [NSWorkspace sharedWorkspace];
+    NSURL *u = [ws URLForApplicationWithBundleIdentifier:@"com.apple.Passwords"];
+    if (u) [ws openApplicationAtURL:u configuration:[NSWorkspaceOpenConfiguration configuration] completionHandler:nil];
+    else NSBeep();
+}
 @end
 
 static Controller *gController;
@@ -743,7 +830,7 @@ static void buildMenu(void) {
     [editMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *wt = [editMenu addItemWithTitle:@"Writing Tools" action:NULL keyEquivalent:@""];
     NSMenu *wtSub = [[NSMenu alloc] initWithTitle:@"Writing Tools"];
-    SEL showWT = @selector(showWritingTools:);   // macOS 15.2+; opens the panel (Apple gates per-action inside it)
+    SEL showWT = @selector(openWritingTools:);   // composer: selection -> native WT -> insert to shell
     [wtSub addItemWithTitle:@"Show Writing Tools" action:showWT keyEquivalent:@""];
     [wtSub addItem:[NSMenuItem separatorItem]];
     [wtSub addItemWithTitle:@"Proofread" action:showWT keyEquivalent:@""];
@@ -757,11 +844,13 @@ static void buildMenu(void) {
     [wtSub addItemWithTitle:@"Make Key Points" action:showWT keyEquivalent:@""];
     [wtSub addItemWithTitle:@"Make List" action:showWT keyEquivalent:@""];
     [wtSub addItemWithTitle:@"Make Table" action:showWT keyEquivalent:@""];
+    for (NSMenuItem *it in wtSub.itemArray) it.target = gController;
     [wt setSubmenu:wtSub];
     NSMenuItem *af = [editMenu addItemWithTitle:@"AutoFill" action:NULL keyEquivalent:@""];
     NSMenu *afSub = [[NSMenu alloc] initWithTitle:@"AutoFill"];
     [afSub addItemWithTitle:@"Contacts" action:@selector(autoFillContacts:) keyEquivalent:@""];
     [afSub addItemWithTitle:@"Passwords" action:@selector(autoFillPasswords:) keyEquivalent:@""];
+    for (NSMenuItem *it in afSub.itemArray) it.target = gController;
     [af setSubmenu:afSub];
     [editMenu addItem:[NSMenuItem separatorItem]];
     [editMenu addItemWithTitle:@"Start Dictation…" action:@selector(startDictation:) keyEquivalent:@""];
@@ -793,7 +882,7 @@ int main(int argc, const char *argv[]) {
                kp0 = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]); }
 
         setenv("TERM_PROGRAM", "kryoterm", 1);
-        setenv("TERM_PROGRAM_VERSION", "1.3", 1);
+        setenv("TERM_PROGRAM_VERSION", "1.4", 1);
         setenv("TERM", "xterm-256color", 1);
         const char *curPath = getenv("PATH");
         if (!curPath || !strstr(curPath, "/opt/homebrew")) {
