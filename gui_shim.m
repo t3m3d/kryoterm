@@ -51,6 +51,8 @@ static int gBlinkMs = 530;               // cursor blink half-period; 0 = steady
 static NSTimer *gBlink;
 static NSColor *gCursorColor;            // cursor colour
 static int gCursorStyle = 0;             // 0 bar | 1 block | 2 underline
+static NSString *gFontName = @"JetBrainsMono Nerd Font Mono";
+static CGFloat gFontSize = 13;
 
 static NSColor *hexColor(const char *h, NSColor *fallback) {
     while (*h == '#' || *h == ' ' || *h == '\t') h++;
@@ -68,6 +70,7 @@ static void loadConfig(void) {
     gTbLight = hexColor("#2b2b2b", nil);  gTbDark = hexColor("#000000", nil);
     gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
     gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
+    gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;
     NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -85,7 +88,11 @@ static void loadConfig(void) {
            "# Cursor blink half-period in milliseconds (0 = steady, no blink).\n"
            "cursor_blink_ms  = 530\n"
            "cursor_color     = #d8dad4\n"
-           "cursor_style     = bar          # bar | block | underline\n";
+           "cursor_style     = bar          # bar | block | underline\n"
+           "\n"
+           "# Font (a Nerd Font keeps the powerline/icon glyphs).\n"
+           "font_family      = JetBrainsMono Nerd Font Mono\n"
+           "font_size        = 13\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -101,6 +108,8 @@ static void loadConfig(void) {
             gCursorStyle = [v hasPrefix:@"block"] ? 1 : ([v hasPrefix:@"under"] ? 2 : 0);
             continue;
         }
+        if ([k isEqualToString:@"font_family"]) { if (v.length) gFontName = v; continue; }
+        if ([k isEqualToString:@"font_size"])   { CGFloat fs = atof(v.UTF8String); if (fs >= 6) gFontSize = fs; continue; }
         NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
         if      ([k isEqualToString:@"cursor_color"])     gCursorColor = c;
@@ -109,6 +118,16 @@ static void loadConfig(void) {
         else if ([k isEqualToString:@"background_light"]) gBgLight = c;
         else if ([k isEqualToString:@"background_dark"])  gBgDark  = c;
     }
+}
+
+// Resolve the configured font and cache its monospace cell metrics.
+static void applyFont(void) {
+    gFont = [NSFont fontWithName:gFontName size:gFontSize]
+         ?: [NSFont fontWithName:@"JetBrainsMono Nerd Font Mono" size:gFontSize]
+         ?: [NSFont fontWithName:@"Menlo" size:gFontSize]
+         ?: [NSFont userFixedPitchFontOfSize:gFontSize];
+    gCharW = gFont.maximumAdvancement.width;
+    gLineH = [[NSLayoutManager new] defaultLineHeightForFont:gFont];
 }
 
 // xterm256(n) — the xterm 256-colour palette index -> NSColor. term.k re-emits
@@ -348,13 +367,7 @@ int main(int argc, const char *argv[]) {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         loadConfig();
-        // A Nerd Font so powerline/git icon glyphs render; cache its cell metrics
-        // for cursor placement (monospace advance + default line height).
-        gFont = [NSFont fontWithName:@"JetBrainsMono Nerd Font Mono" size:13]
-             ?: [NSFont fontWithName:@"Menlo" size:13]
-             ?: [NSFont userFixedPitchFontOfSize:13];
-        gCharW = gFont.maximumAdvancement.width;
-        gLineH = [[NSLayoutManager new] defaultLineHeightForFont:gFont];
+        applyFont();   // resolve the configured font + cache cell metrics
 
         NSRect frame = NSMakeRect(0, 0, 830, 500);   // ~104x30 at Menlo 13
         NSWindow *win = [[NSWindow alloc]
@@ -402,7 +415,9 @@ int main(int argc, const char *argv[]) {
         [[NSNotificationCenter defaultCenter]
             addObserverForName:NSWindowDidBecomeKeyNotification object:win
                          queue:[NSOperationQueue mainQueue]
-                    usingBlock:^(NSNotification *_n){ loadConfig(); applyColors(); restartBlink(); }];
+                    usingBlock:^(NSNotification *_n){
+                        loadConfig(); applyFont(); applyColors(); restartBlink(); sendResize(gView);
+                    }];
 
         Reader *r = [[Reader alloc] init];
         [NSThread detachNewThreadSelector:@selector(readLoop) toTarget:r withObject:nil];
