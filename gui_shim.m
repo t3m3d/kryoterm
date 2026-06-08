@@ -264,8 +264,7 @@ static void sendScrollbackCap(void) {
 @implementation KryptonView
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)isFlipped { return YES; }              // text origin at top-left
-- (void)setFrameSize:(NSSize)s { [super setFrameSize:s]; sendResize(self); }   // reflow live (guarded)
-- (void)viewDidEndLiveResize { gHasSel = NO; sendResize(self); }               // final reflow; clear selection
+- (void)viewDidEndLiveResize { gHasSel = NO; sendResize(self); }   // reflow at drag end (gridNew would flicker mid-drag)
 - (void)scrollWheel:(NSEvent *)e {                   // wheel -> scrollback
     if (gMaster < 0 || gLineH < 1) return;
     static CGFloat acc = 0;
