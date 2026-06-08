@@ -402,17 +402,22 @@ static void sendScrollbackCap(void) {
     [[(gCurBg ?: [NSColor blackColor]) colorWithAlphaComponent:gOpacity] set];
     NSRectFill(self.bounds);
     if (self.attr) [self.attr drawAtPoint:NSMakePoint(kPadX, kPadY)];
-    // cursor at the shell's cursor cell (focused + blink-on); style from config.
-    if (self.window.isKeyWindow && gCursorOn) {
+    // cursor: filled (per style, blinks) when focused; hollow outline when not.
+    if (gCurRow < gRows) {
         NSColor *cc = gCursorColor ?: [NSColor whiteColor];
         CGFloat x = kPadX + gCurCol * gCharW, y = kPadY + gCurRow * gLineH;
-        NSRect r;
-        if (gCursorStyle == 1)      { r = NSMakeRect(x, y, gCharW, gLineH);            // block
-                                      cc = [cc colorWithAlphaComponent:0.45]; }        // (glyph shows through)
-        else if (gCursorStyle == 2) { r = NSMakeRect(x, y + gLineH - 2, gCharW, 2); }  // underline
-        else                        { r = NSMakeRect(x, y, 2.0, gLineH); }             // bar
-        [cc set];
-        NSRectFill(r);
+        if (!self.window.isKeyWindow) {                          // unfocused -> hollow cell
+            [cc set];
+            NSFrameRect(NSMakeRect(x, y, gCharW, gLineH));
+        } else if (gCursorOn) {
+            NSRect r;
+            if (gCursorStyle == 1)      { r = NSMakeRect(x, y, gCharW, gLineH);            // block
+                                          cc = [cc colorWithAlphaComponent:0.45]; }        // (glyph shows through)
+            else if (gCursorStyle == 2) { r = NSMakeRect(x, y + gLineH - 2, gCharW, 2); }  // underline
+            else                        { r = NSMakeRect(x, y, 2.0, gLineH); }             // bar
+            [cc set];
+            NSRectFill(r);
+        }
     }
     // selection highlight (translucent overlay)
     if (gHasSel) {
