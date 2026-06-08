@@ -124,6 +124,21 @@ func _scrollUp(g, stride, gtotal, fillRow) {
 
 // _applySgr(pen, params) — fold an SGR list (e.g. "1;31;44") into the colour pen
 // (fg*256+bg, sentinel 1 each): fg 30-37/39/90-97, bg 40-47/49/100-107.
+// _lvl(v) — an 8-bit channel -> nearest xterm-256 cube level (0-5).
+func _lvl(v) {
+    if v < 48 { emit 0 }
+    if v < 115 { emit 1 }
+    if v < 155 { emit 2 }
+    if v < 195 { emit 3 }
+    if v < 235 { emit 4 }
+    emit 5
+}
+// _rgb256(r,g,b) — nearest xterm-256 colour-cube index (16-231). Truecolor
+// (38;2/48;2) is folded to 256 so it fits the 1-byte-per-cell colour model.
+func _rgb256(r, g, b) {
+    emit 16 + 36 * _lvl(r) + 6 * _lvl(g) + _lvl(b)
+}
+
 func _applySgr(pen, params) {
     let n = len(params)
     if n == 0 { emit 257 }
@@ -133,8 +148,12 @@ func _applySgr(pen, params) {
     let cur = 0
     let any = 0
     // fg/bg encoded as a 256-colour index: 1 = default, 2..255 = index 0..253.
-    // stage drives the 38;5;N / 48;5;N (256-colour) sub-sequences.
-    let stage = 0                            // 0 normal; 1 got 38; 2 got 38;5; 3 got 48; 4 got 48;5
+    // stage drives the 38;5;N / 48;5;N (256) and 38;2;r;g;b / 48;2;r;g;b (true-
+    // colour) sub-sequences. tr/tg hold r,g while collecting a truecolor triple.
+    let stage = 0    // 0 norm; 1 got38; 2 got38;5; 3 got48; 4 got48;5;
+                     // 5/6/7 = 38;2 r/g/b ; 8/9/10 = 48;2 r/g/b
+    let tr = 0
+    let tg = 0
     while i <= n {
         let sep = 0
         if i == n { sep = 1 }
@@ -143,8 +162,14 @@ func _applySgr(pen, params) {
             if any == 1 {
                 if stage == 2 { let x = cur  if x > 253 { x = 253 }  fg = x + 2  stage = 0 }
                 else { if stage == 4 { let x = cur  if x > 253 { x = 253 }  bg = x + 2  stage = 0 }
-                else { if stage == 1 { if cur == 5 { stage = 2 } else { stage = 0 } }
-                else { if stage == 3 { if cur == 5 { stage = 4 } else { stage = 0 } }
+                else { if stage == 5 { tr = cur  stage = 6 }
+                else { if stage == 6 { tg = cur  stage = 7 }
+                else { if stage == 7 { let x = _rgb256(tr, tg, cur)  if x > 253 { x = 253 }  fg = x + 2  stage = 0 }
+                else { if stage == 8 { tr = cur  stage = 9 }
+                else { if stage == 9 { tg = cur  stage = 10 }
+                else { if stage == 10 { let x = _rgb256(tr, tg, cur)  if x > 253 { x = 253 }  bg = x + 2  stage = 0 }
+                else { if stage == 1 { if cur == 5 { stage = 2 } else { if cur == 2 { stage = 5 } else { stage = 0 } } }
+                else { if stage == 3 { if cur == 5 { stage = 4 } else { if cur == 2 { stage = 8 } else { stage = 0 } } }
                 else {
                     if cur == 0 { fg = 1  bg = 1 }
                     if cur == 38 { stage = 1 }
@@ -155,7 +180,7 @@ func _applySgr(pen, params) {
                     if cur == 49 { bg = 1 }
                     if cur >= 40 && cur <= 47 { bg = cur - 38 }      // index 0-7
                     if cur >= 100 && cur <= 107 { bg = cur - 90 }    // index 8-15
-                } } } }
+                } } } } } } } } } }
             }
             cur = 0
             any = 0
