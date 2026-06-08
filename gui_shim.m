@@ -527,6 +527,13 @@ int main(int argc, const char *argv[]) {
     @autoreleasepool {
         const char *kpath = (argc > 1) ? argv[1] : "./kryoterm";
 
+        // Identify as kryoterm (not the host terminal that launched us) — the
+        // shell inherits this env, so kryofetch & co. report kryoterm. Also pin a
+        // sane TERM (the host may set xterm-ghostty etc. with no local terminfo).
+        setenv("TERM_PROGRAM", "kryoterm", 1);
+        setenv("TERM_PROGRAM_VERSION", "1.0", 1);
+        setenv("TERM", "xterm-256color", 1);
+
         // Spawn `kryoterm -i` over TWO pipes (not one shared pty): keys go down
         // inpipe to its stdin, frames come up outpipe from its stdout. Separate
         // open-file-descriptions = independent O_NONBLOCK — kryoterm can make its
