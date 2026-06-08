@@ -627,7 +627,7 @@ static void restartBlink(void) {
                                 if (gBellMode == 2) NSBeep();
                                 else if (gBellMode == 1) {
                                     gFlashOn = YES; [gView setNeedsDisplay:YES];
-                                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.09*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.04*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                                         gFlashOn = NO; [gView setNeedsDisplay:YES];
                                     });
                                 }
