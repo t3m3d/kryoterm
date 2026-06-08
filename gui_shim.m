@@ -729,6 +729,7 @@ int main(int argc, const char *argv[]) {
                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
                         backing:NSBackingStoreBuffered defer:NO];
         [win setTitle:@"kryoterm — pure-Krypton terminal"];
+        [win setContentMinSize:NSMakeSize(240, 140)];   // no uselessly tiny window
         gWin = win;
         // Dark-styled titlebar (light text, correct traffic lights) tinted by our
         // configured colour; the title bar takes the window background colour.

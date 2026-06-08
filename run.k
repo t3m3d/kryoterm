@@ -118,7 +118,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
                                     cols = nc  rows = nr
                                     st = gridNew(cols, rows)
                                     ptySetSize(m, rows, cols)
-                                    scrollback = ""  scrollOff = 0
+                                    scrollOff = 0          // keep scrollback (history survives resize)
                                 }
                             }
                         }
