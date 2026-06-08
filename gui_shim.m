@@ -429,6 +429,8 @@ static void sendResize(NSView *v) {
         if ([ch isEqualToString:@"v"]) { [self pasteClipboard]; return; }
         if ([ch isEqualToString:@"k"]) { write(gMaster, "\036C,0\036", 5); return; }  // clear
         if ([ch isEqualToString:@"f"]) { [self openSearch]; return; }                  // find
+        if ([ch isEqualToString:@"g"]) { write(gMaster, "\036N,\036", 4); return; }    // ⌘G  next match
+        if ([ch isEqualToString:@"G"]) { write(gMaster, "\036P,\036", 4); return; }    // ⌘⇧G prev match
         if ([ch isEqualToString:@"="] || [ch isEqualToString:@"+"]) {                  // zoom in
             gFontSize += 1; applyFont(); sendResize(self); [self setNeedsDisplay:YES]; return;
         }
