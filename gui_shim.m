@@ -381,11 +381,12 @@ static void sendScrollbackCap(void) {
 // drag-and-drop files -> insert their (shell-quoted) paths
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)s { return NSDragOperationCopy; }
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)s {
-    NSArray *files = [[s draggingPasteboard] propertyListForType:NSFilenamesPboardType];
-    if (!files.count || gMaster < 0) return NO;
+    NSArray<NSURL *> *urls = [[s draggingPasteboard] readObjectsForClasses:@[[NSURL class]]
+                                                                   options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    if (!urls.count || gMaster < 0) return NO;
     NSMutableString *out = [NSMutableString string];
-    for (NSString *f in files)
-        [out appendFormat:@"'%@' ", [f stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
+    for (NSURL *u in urls)
+        [out appendFormat:@"'%@' ", [u.path stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
     const char *b = [out UTF8String]; write(gMaster, b, strlen(b));
     return YES;
 }
@@ -734,7 +735,7 @@ int main(int argc, const char *argv[]) {
 
         gView = [[KryptonView alloc] initWithFrame:frame];
         [gView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-        [gView registerForDraggedTypes:@[NSFilenamesPboardType]];   // drag files -> paths
+        [gView registerForDraggedTypes:@[NSPasteboardTypeFileURL]];   // drag files -> paths
         [win setContentView:gView];
 
         // ⌘F search bar — top-right, hidden until opened, sticks to the corner.
