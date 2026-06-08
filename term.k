@@ -217,7 +217,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0" + fromCharCode(1)
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0" + fromCharCode(1)
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -241,6 +241,7 @@ func gridFeed(state, s, cols, rows) {
     let spen = _cf(tail, 5)              // saved colour pen
     let pw = _cf(tail, 6)                // pending wrap (deferred auto-margin)
     let scrolled = ""                    // rows scrolled off THIS feed (reset each call)
+    let bell = 0                         // bare BEL (0x07) seen THIS feed (reset each call)
     let n = len(s)
     let i = 0
 
@@ -363,7 +364,7 @@ func gridFeed(state, s, cols, rows) {
                                 if cc >= cols - 1 { pw = 1 }                     // at last column -> defer wrap
                                 else { cc = cc + 1 }
                                 i = i + clen
-                            } else { i = i + 1 }                                 // other control byte
+                            } else { if c == 7 { bell = 1 }  i = i + 1 }          // BEL (bell) / other control byte
                         }
                     }
                 }
@@ -371,7 +372,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + fromCharCode(1) + scrolled
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + fromCharCode(1) + scrolled
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
@@ -508,6 +509,15 @@ func gridCursor(state, cols, rows) {
     let total = cols * rows
     let tail = substring(state, 7 * total + 1, len(state))
     emit _cf(tail, 0) + "," + _cf(tail, 1)
+}
+
+// gridBell(state, cols, rows) — 1 if a bare BEL (0x07) arrived during the last
+// gridFeed, else 0. The bridge raises a one-shot bell from this.
+func gridBell(state, cols, rows) {
+    let total = cols * rows
+    let tailFull = substring(state, 7 * total + 1, len(state))
+    let sohp = indexOf(tailFull, fromCharCode(1))
+    emit _cf(substring(tailFull, 0, sohp), 7)
 }
 
 // gridScrolled(state, cols, rows) — the rows that scrolled off the top during the

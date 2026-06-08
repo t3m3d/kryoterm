@@ -89,6 +89,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
     let findQuery = ""                    // active find-in-scrollback query
     let findIdx = 0                       // which match (0 = most recent), wraps
     let findResult = "-1,-1,-1,0,0"           // matchRow,matchCol,matchLen for the shim to highlight
+    let bellOn = 0                            // one-shot bell for the next frame
     let i = 0
     while i < 2000000000 {
         let keys = fdRead(0, 4096)
@@ -171,6 +172,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
             let cut = gridSafeLen(chunk)
             if cut > 0 {
                 st = gridFeed(st, substring(chunk, 0, cut), cols, rows)
+                if gridBell(st, cols, rows) == 1 { bellOn = 1 }
                 let sc = gridScrolled(st, cols, rows)          // rows that scrolled off
                 if len(sc) > 0 {
                     scrollback = scrollback + sc
@@ -211,8 +213,8 @@ func kryoterm_interactive(shellPath, cols, rows) {
                 cur = "9999,0"
                 body = gridScrollView(scrollback, body, rows, scrollOff)
             }
-            // header: row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,title
-            let frame = soh + cur + "," + scrollOff + "," + smax + "," + findResult + "," + title + soh + body + ff
+            // header: row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,matchNum,matchTotal,bell,title
+            let frame = soh + cur + "," + scrollOff + "," + smax + "," + findResult + "," + bellOn + "," + title + soh + body + ff
             // write() to a pty can be PARTIAL (small kernel buffer); loop or the
             // frame (and its terminating \f) gets truncated and the shim never
             // sees a complete frame.
@@ -224,6 +226,7 @@ func kryoterm_interactive(shellPath, cols, rows) {
                 else { off = off + w }
             }
             dirty = 0
+            bellOn = 0                      // one-shot consumed by this frame
         }
         sleepUs(0, 8000)                   // ~8ms poll
         i = i + 1

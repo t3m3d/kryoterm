@@ -64,6 +64,8 @@ static NSString *gFontName = @"JetBrainsMono Nerd Font Mono";
 static CGFloat gFontSize = 13;
 static CGFloat gOpacity = 1.0;           // window background opacity (text stays opaque)
 static CGFloat gLineSpacing = 0;         // extra px between rows
+static int gBellMode = 1;                // 0 off | 1 visual flash | 2 audible
+static BOOL gFlashOn = NO;               // visual-bell flash in progress
 static BOOL gCopyOnSelect = NO;          // auto-copy a selection on mouse-up
 static int gScrollbackLines = 2000;      // scrollback history cap
 
@@ -84,7 +86,7 @@ static void loadConfig(void) {
     gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
     gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
     gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;  gOpacity = 1.0;
-    kPadX = 6;  kPadY = 4;  gCopyOnSelect = NO;  gScrollbackLines = 2000;  gLineSpacing = 0;
+    kPadX = 6;  kPadY = 4;  gCopyOnSelect = NO;  gScrollbackLines = 2000;  gLineSpacing = 0;  gBellMode = 1;
     NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -113,7 +115,8 @@ static void loadConfig(void) {
            "padding          = 6\n"
            "copy_on_select   = false        # auto-copy selection; middle-click pastes\n"
            "scrollback_lines = 2000\n"
-           "line_spacing     = 0\n";
+           "line_spacing     = 0\n"
+           "bell             = visual       # visual | audible | off\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -136,6 +139,7 @@ static void loadConfig(void) {
         if ([k isEqualToString:@"copy_on_select"]) { gCopyOnSelect = ([v hasPrefix:@"t"] || [v hasPrefix:@"1"] || [v hasPrefix:@"y"]); continue; }
         if ([k isEqualToString:@"scrollback_lines"]) { int n = atoi(v.UTF8String); if (n >= 100) gScrollbackLines = n; continue; }
         if ([k isEqualToString:@"line_spacing"]) { CGFloat ls = atof(v.UTF8String); if (ls >= 0 && ls <= 20) gLineSpacing = ls; continue; }
+        if ([k isEqualToString:@"bell"]) { gBellMode = [v hasPrefix:@"aud"] ? 2 : ([v hasPrefix:@"off"] ? 0 : 1); continue; }
         NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
         if      ([k isEqualToString:@"cursor_color"])     gCursorColor = c;
@@ -490,6 +494,11 @@ static void sendScrollbackCap(void) {
         [[NSColor colorWithCalibratedRed:0.72 green:0.74 blue:0.70 alpha:0.5] set];
         NSRectFill(NSMakeRect(self.bounds.size.width - 5, y, 3, thumbH));
     }
+    // visual-bell flash
+    if (gFlashOn) {
+        [[NSColor colorWithCalibratedWhite:0.9 alpha:0.22] set];
+        NSRectFill(self.bounds);
+    }
 }
 - (void)keyDown:(NSEvent *)e {
     if (gMaster < 0) return;
@@ -600,20 +609,29 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            // header = row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,matchNum,matchTotal,title
-                            int fv[9] = {0,0,0,0,0,0,0,0,0}; int neg[9] = {0,0,0,0,0,0,0,0,0};
+                            // header = row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,matchNum,matchTotal,bell,title
+                            int fv[10] = {0,0,0,0,0,0,0,0,0,0}; int neg[10] = {0,0,0,0,0,0,0,0,0,0};
                             int field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 9) { titleStart = m+1; break; } }
-                                else if (field < 9) {
+                                if (p[m] == ',') { field++; if (field == 10) { titleStart = m+1; break; } }
+                                else if (field < 10) {
                                     if (p[m] == '-') neg[field] = 1;
                                     else if (p[m] >= '0' && p[m] <= '9') fv[field] = fv[field]*10 + (p[m]-'0');
                                 }
                             }
-                            for (int q = 0; q < 9; q++) if (neg[q]) fv[q] = -fv[q];
+                            for (int q = 0; q < 10; q++) if (neg[q]) fv[q] = -fv[q];
                             gCurRow = fv[0]; gCurCol = fv[1]; gScrollOff = fv[2]; gScrollMax = fv[3];
                             gMatchRow = fv[4]; gMatchCol = fv[5]; gMatchLen = fv[6];
                             gMatchNum = fv[7]; gMatchTotal = fv[8];
+                            if (fv[9] == 1) {                       // bell
+                                if (gBellMode == 2) NSBeep();
+                                else if (gBellMode == 1) {
+                                    gFlashOn = YES; [gView setNeedsDisplay:YES];
+                                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.09*NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                                        gFlashOn = NO; [gView setNeedsDisplay:YES];
+                                    });
+                                }
+                            }
                             if (!gSearchField.hidden)
                                 gSearchCount.stringValue = gMatchTotal > 0
                                     ? [NSString stringWithFormat:@"%d/%d", gMatchNum, gMatchTotal] : @"0/0";

@@ -83,6 +83,7 @@ font_size        = 13
 opacity          = 1.0          # 0.2–1.0, translucent bg (text stays opaque)
 padding          = 6
 line_spacing     = 0            # extra px between rows
+bell             = visual       # visual | audible | off
 copy_on_select   = false        # auto-copy selection; middle-click pastes
 scrollback_lines = 2000
 ```
