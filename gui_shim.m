@@ -33,7 +33,7 @@ static int   gSelAR = 0, gSelAC = 0, gSelER = 0, gSelEC = 0;   // selection anch
 static BOOL  gHasSel = NO;
 static NSFont *gFont;
 static CGFloat gCharW = 7.8, gLineH = 15.5;
-static const CGFloat kPadX = 6, kPadY = 4;   // text origin inside the view
+static CGFloat kPadX = 6, kPadY = 4;     // text origin inside the view (configurable)
 
 // Debug log (an agent can't see the window; this is how we diagnose). Tail it:
 //   tail -f /tmp/kryoterm-gui.log
@@ -76,6 +76,7 @@ static void loadConfig(void) {
     gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
     gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
     gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;  gOpacity = 1.0;
+    kPadX = 6;  kPadY = 4;
     NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -100,7 +101,8 @@ static void loadConfig(void) {
            "font_size        = 13\n"
            "\n"
            "# Window background opacity (0.2-1.0; text stays opaque).\n"
-           "opacity          = 1.0\n";
+           "opacity          = 1.0\n"
+           "padding          = 6\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -119,6 +121,7 @@ static void loadConfig(void) {
         if ([k isEqualToString:@"font_family"]) { if (v.length) gFontName = v; continue; }
         if ([k isEqualToString:@"font_size"])   { CGFloat fs = atof(v.UTF8String); if (fs >= 6) gFontSize = fs; continue; }
         if ([k isEqualToString:@"opacity"])     { CGFloat o = atof(v.UTF8String); if (o >= 0.2 && o <= 1.0) gOpacity = o; continue; }
+        if ([k isEqualToString:@"padding"])     { CGFloat pd = atof(v.UTF8String); if (pd >= 0 && pd <= 40) { kPadX = pd; kPadY = pd; } continue; }
         NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
         if      ([k isEqualToString:@"cursor_color"])     gCursorColor = c;
