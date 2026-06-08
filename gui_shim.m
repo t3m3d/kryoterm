@@ -57,6 +57,7 @@ static NSColor *gCursorColor;            // cursor colour
 static int gCursorStyle = 0;             // 0 bar | 1 block | 2 underline
 static NSString *gFontName = @"JetBrainsMono Nerd Font Mono";
 static CGFloat gFontSize = 13;
+static CGFloat gOpacity = 1.0;           // window background opacity (text stays opaque)
 
 static NSColor *hexColor(const char *h, NSColor *fallback) {
     while (*h == '#' || *h == ' ' || *h == '\t') h++;
@@ -74,7 +75,7 @@ static void loadConfig(void) {
     gTbLight = hexColor("#2b2b2b", nil);  gTbDark = hexColor("#000000", nil);
     gBgLight = hexColor("#2b2b2b", nil);  gBgDark = hexColor("#000000", nil);
     gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
-    gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;
+    gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;  gOpacity = 1.0;
     NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -96,7 +97,10 @@ static void loadConfig(void) {
            "\n"
            "# Font (a Nerd Font keeps the powerline/icon glyphs).\n"
            "font_family      = JetBrainsMono Nerd Font Mono\n"
-           "font_size        = 13\n";
+           "font_size        = 13\n"
+           "\n"
+           "# Window background opacity (0.2-1.0; text stays opaque).\n"
+           "opacity          = 1.0\n";
         [def writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     }
     NSString *txt = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
@@ -114,6 +118,7 @@ static void loadConfig(void) {
         }
         if ([k isEqualToString:@"font_family"]) { if (v.length) gFontName = v; continue; }
         if ([k isEqualToString:@"font_size"])   { CGFloat fs = atof(v.UTF8String); if (fs >= 6) gFontSize = fs; continue; }
+        if ([k isEqualToString:@"opacity"])     { CGFloat o = atof(v.UTF8String); if (o >= 0.2 && o <= 1.0) gOpacity = o; continue; }
         NSColor *c = hexColor(v.UTF8String, nil);
         if (!c) continue;
         if      ([k isEqualToString:@"cursor_color"])     gCursorColor = c;
@@ -312,7 +317,7 @@ static void sendResize(NSView *v) {
     }
 }
 - (void)drawRect:(NSRect)dirty {
-    [(gCurBg ?: [NSColor blackColor]) set];
+    [[(gCurBg ?: [NSColor blackColor]) colorWithAlphaComponent:gOpacity] set];
     NSRectFill(self.bounds);
     if (self.attr) [self.attr drawAtPoint:NSMakePoint(kPadX, kPadY)];
     // cursor at the shell's cursor cell (focused + blink-on); style from config.
@@ -396,7 +401,10 @@ static KryptonView *gView;
 static void applyColors(void) {
     BOOL dark = systemIsDark();
     gCurBg = dark ? gBgDark : gBgLight;
-    if (gWin) gWin.backgroundColor = (dark ? gTbDark : gTbLight);
+    if (gWin) {
+        gWin.opaque = (gOpacity >= 0.999);
+        gWin.backgroundColor = [(dark ? gTbDark : gTbLight) colorWithAlphaComponent:gOpacity];
+    }
     if (gView) [gView setNeedsDisplay:YES];
 }
 
