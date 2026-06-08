@@ -18,7 +18,19 @@ native `waitChild` builtin and shuts down.
  window   ◀─ Obj-C shim ◀(frames)─ kryoterm -i ◀──────  (term.k grid)
 ```
 
-## Run
+## Install (macOS, Apple Silicon)
+
+```bash
+brew tap t3m3d/krypton      # once
+brew install kryoterm
+kryoterm                    # opens the terminal window
+```
+
+Self-contained — no krypton runtime dependency. A
+[JetBrainsMono Nerd Font](https://www.nerdfonts.com/) is recommended for the
+powerline/icon glyphs (configurable in `~/.config/kryoterm/config`).
+
+## Build from source
 
 ```bash
 ./gui.sh          # builds the shim if needed, launches the windowed terminal
