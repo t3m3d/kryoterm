@@ -21,10 +21,13 @@ native `waitChild` builtin and shuts down.
 ## Install (macOS, Apple Silicon)
 
 ```bash
-brew tap t3m3d/krypton      # once
-brew install kryoterm
-kryoterm                    # opens the terminal window
+brew tap t3m3d/krypton          # once
+brew install kryoterm           # the `kryoterm` command -> run it to open a window
+brew install --cask kryoterm    # OR a clickable kryoterm.app in /Applications
 ```
+
+The cask app is ad-hoc signed (not notarized) — first launch, right-click → Open
+(or `xattr -dr com.apple.quarantine /Applications/kryoterm.app`).
 
 Self-contained — no krypton runtime dependency. A
 [JetBrainsMono Nerd Font](https://www.nerdfonts.com/) is recommended for the
