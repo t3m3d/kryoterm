@@ -82,5 +82,18 @@ just run {
   let tc = renderGrid(e + "[48;2;200;50;50m" + "X" + e + "[0m", 8, 1)
   chk("truecolor folds to 48;5;167", contains(tc, "48;5;167"), 1)
 
+  // core ANSI behaviours (most likely to silently regress)
+  chk("deferred wrap", renderGrid("abcdef", 5, 2), "abcde" + nl + "f")
+  chk("EL 0 cursor-to-end", renderGrid("ABCDE" + e + "[1;3H" + e + "[0K", 6, 1), "AB")
+  chk("EL 1 start-to-cursor", renderGrid("ABCDE" + e + "[1;3H" + e + "[1K", 6, 1), "   DE")
+  chk("EL 2 whole line", renderGrid("ABCDE" + e + "[1;3H" + e + "[2K", 6, 1), "")
+  chk("cursor save/restore ESC7/8", renderGrid("AB" + e + "7CD" + e + "8X", 10, 1), "ABXD")
+  chk("cursor save/restore CSI s/u", renderGrid("AB" + e + "[sCD" + e + "[uX", 10, 1), "ABXD")
+  chk("backspace", renderGrid("abc" + fromCharCode(8) + "X", 5, 1), "abX")
+  chk("tab to col 8", renderGrid("a" + fromCharCode(9) + "b", 12, 1), "a       b")
+  chk("256-colour emit", contains(renderGrid(e + "[38;5;200mX" + e + "[0m", 5, 1), "38;5;200"), 1)
+  chk("utf-8 single cell", renderGrid("café", 6, 1), "café")
+  chk("CUP positions", renderGrid(e + "[2;4HZ", 8, 2), nl + "   Z")
+
   kp("--- done ---")
 }
