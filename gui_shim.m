@@ -786,6 +786,9 @@ static WTComposer *gWT;
     if (u) [ws openApplicationAtURL:u configuration:[NSWorkspaceOpenConfiguration configuration] completionHandler:nil];
     else NSBeep();
 }
+- (void)zoomIn:(id)s     { gFontSize += 1; applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
+- (void)zoomOut:(id)s    { if (gFontSize > 7) gFontSize -= 1; applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
+- (void)zoomActual:(id)s { loadConfig(); applyFont(); for (KryptonView *p in gPanes) { [p sendResize]; [p setNeedsDisplay:YES]; } }
 @end
 
 static Controller *gController;
@@ -856,6 +859,18 @@ static void buildMenu(void) {
     [editMenu addItemWithTitle:@"Start Dictation…" action:@selector(startDictation:) keyEquivalent:@""];
     [editMenu addItemWithTitle:@"Emoji & Symbols" action:@selector(orderFrontCharacterPalette:) keyEquivalent:@""];
     [editItem setSubmenu:editMenu];
+    // View menu — full screen, global font zoom, tab bar.
+    NSMenuItem *viewItem = [[NSMenuItem alloc] init]; [mainMenu addItem:viewItem];
+    NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
+    mi=[viewMenu addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"]; mi.keyEquivalentModifierMask=(NSEventModifierFlagCommand|NSEventModifierFlagControl);
+    [viewMenu addItem:[NSMenuItem separatorItem]];
+    mi=[viewMenu addItemWithTitle:@"Bigger" action:@selector(zoomIn:) keyEquivalent:@"+"]; mi.target=gController;
+    mi=[viewMenu addItemWithTitle:@"Default Size" action:@selector(zoomActual:) keyEquivalent:@"0"]; mi.target=gController;
+    mi=[viewMenu addItemWithTitle:@"Smaller" action:@selector(zoomOut:) keyEquivalent:@"-"]; mi.target=gController;
+    [viewMenu addItem:[NSMenuItem separatorItem]];
+    [viewMenu addItemWithTitle:@"Show/Hide Tab Bar" action:@selector(toggleTabBar:) keyEquivalent:@""];
+    [viewMenu addItemWithTitle:@"Show All Tabs" action:@selector(toggleTabOverview:) keyEquivalent:@""];
+    [viewItem setSubmenu:viewMenu];
     // Window menu (native — gives tab navigation: Show Next/Previous Tab, etc.)
     NSMenuItem *winItem = [[NSMenuItem alloc] init]; [mainMenu addItem:winItem];
     NSMenu *winMenu = [[NSMenu alloc] initWithTitle:@"Window"];
@@ -882,7 +897,7 @@ int main(int argc, const char *argv[]) {
                kp0 = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]); }
 
         setenv("TERM_PROGRAM", "kryoterm", 1);
-        setenv("TERM_PROGRAM_VERSION", "1.4", 1);
+        setenv("TERM_PROGRAM_VERSION", "1.5", 1);
         setenv("TERM", "xterm-256color", 1);
         const char *curPath = getenv("PATH");
         if (!curPath || !strstr(curPath, "/opt/homebrew")) {
