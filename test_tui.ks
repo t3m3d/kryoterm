@@ -65,6 +65,14 @@ just run {
   pm = gridFeed(pm, e + "[?2004l", 20, 2)
   chk("paste off", gridPaste(pm, 20, 2), 0)
 
+  // focus reporting (DECSET 1004)
+  let fm = gridNew(20, 2)
+  chk("focus init", gridFocus(fm, 20, 2), 0)
+  fm = gridFeed(fm, e + "[?1004h", 20, 2)
+  chk("focus on", gridFocus(fm, 20, 2), 1)
+  fm = gridFeed(fm, e + "[?1004l", 20, 2)
+  chk("focus off", gridFocus(fm, 20, 2), 0)
+
   // scrollback capture (5 lines into a 3-row grid -> 3 scroll off)
   let sb = gridFeed(gridNew(10, 3), "L1" + nl + "L2" + nl + "L3" + nl + "L4" + nl + "L5" + nl, 10, 3)
   chk("scrollback captured", gridScrolled(sb, 10, 3), "L1" + nl + "L2" + nl + "L3" + nl)

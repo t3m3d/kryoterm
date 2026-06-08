@@ -35,6 +35,7 @@ static int   gMouseLevel = 0, gMouseSgr = 0;                 // app mouse tracki
 static int   gCursorShape = 0;                              // app cursor shape (DECSCUSR): 0 config, 1 bar, 2 block, 3 underline
 static int   gPasteMode = 0;                                // app enabled bracketed paste (DECSET 2004)
 static int   gAltActive = 0;                                // alternate screen active
+static int   gFocusMode = 0;                                // app enabled focus reporting (DECSET 1004)
 static BOOL  gMouseReporting = NO;                           // current drag is a reported mouse press
 static int   gLastMouseR = -1, gLastMouseC = -1;            // throttle motion reports
 static int   gMousePressBtn = 0;                            // button held (for the release report)
@@ -702,21 +703,21 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            // header = row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,cshape,paste,alt,title
-                            int fv[15] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; int neg[15] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+                            // header = row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,cshape,paste,alt,focus,title
+                            int fv[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; int neg[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
                             int field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 15) { titleStart = m+1; break; } }
-                                else if (field < 15) {
+                                if (p[m] == ',') { field++; if (field == 16) { titleStart = m+1; break; } }
+                                else if (field < 16) {
                                     if (p[m] == '-') neg[field] = 1;
                                     else if (p[m] >= '0' && p[m] <= '9') fv[field] = fv[field]*10 + (p[m]-'0');
                                 }
                             }
-                            for (int q = 0; q < 15; q++) if (neg[q]) fv[q] = -fv[q];
+                            for (int q = 0; q < 16; q++) if (neg[q]) fv[q] = -fv[q];
                             gCurRow = fv[0]; gCurCol = fv[1]; gScrollOff = fv[2]; gScrollMax = fv[3];
                             gMatchRow = fv[4]; gMatchCol = fv[5]; gMatchLen = fv[6];
                             gMatchNum = fv[7]; gMatchTotal = fv[8];
-                            gMouseLevel = fv[10]; gMouseSgr = fv[11]; gCursorShape = fv[12]; gPasteMode = fv[13]; gAltActive = fv[14];
+                            gMouseLevel = fv[10]; gMouseSgr = fv[11]; gCursorShape = fv[12]; gPasteMode = fv[13]; gAltActive = fv[14]; gFocusMode = fv[15];
                             if (fv[9] == 1) {                       // bell
                                 if (gBellMode == 2) NSBeep();
                                 else if (gBellMode == 1) {
@@ -912,6 +913,14 @@ int main(int argc, const char *argv[]) {
                          queue:[NSOperationQueue mainQueue]
                     usingBlock:^(NSNotification *_n){
                         loadConfig(); applyFont(); applyColors(); restartBlink(); sendResize(gView); sendScrollbackCap();
+                        if (gFocusMode && gMaster >= 0) write(gMaster, "\033[I", 3);   // focus in
+                    }];
+        // Focus-out: notify focus-reporting apps.
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:NSWindowDidResignKeyNotification object:win queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *_n){
+                        if (gFocusMode && gMaster >= 0) write(gMaster, "\033[O", 3);   // focus out
+                        [gView setNeedsDisplay:YES];   // redraw cursor as hollow
                     }];
 
         // ⌘Q / terminate: doesn't return from [NSApp run], so reap the child here.
