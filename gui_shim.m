@@ -694,6 +694,25 @@ int main(int argc, const char *argv[]) {
         setenv("TERM_PROGRAM_VERSION", "1.0", 1);
         setenv("TERM", "xterm-256color", 1);
 
+        // A Finder-launched .app inherits a minimal PATH (no /opt/homebrew/bin),
+        // so brew tools (kryofetch) + p10k's git/etc. go missing → plain prompt.
+        // Capture the real login-shell PATH and export it for the shell we spawn.
+        const char *curPath = getenv("PATH");
+        if (!curPath || !strstr(curPath, "/opt/homebrew") ) {
+            FILE *fp = popen("/bin/zsh -lic 'printf KTPATH=%s\\\\n \"$PATH\"' 2>/dev/null", "r");
+            if (fp) {
+                char line[8192];
+                while (fgets(line, sizeof line, fp)) {
+                    if (strncmp(line, "KTPATH=", 7) == 0) {
+                        line[strcspn(line, "\n")] = 0;
+                        if (strlen(line) > 7) setenv("PATH", line + 7, 1);
+                        break;
+                    }
+                }
+                pclose(fp);
+            }
+        }
+
         // Absolute paths so ⌘N can re-launch another window.
         NSString *(^abspath)(const char *) = ^NSString *(const char *p) {
             NSString *s = [NSString stringWithUTF8String:p];
