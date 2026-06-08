@@ -13,8 +13,10 @@ selection/copy, find, resize reflow, configurable theme/font/cursor. Runs full
 TUIs — **mouse reporting** (X10/SGR-1006, wheel scrolls in alt-screen),
 **alternate screen** (1049/1047/47), **cursor show/hide** (DECSET 25) +
 **shape** (DECSCUSR), **bracketed paste** (2004) and **focus reporting** (1004) —
-so vim, htop, less, tmux work. Typing `exit` (or any shell EOF) closes the window — the bridge reaps
-the shell via the native `waitChild` builtin and shuts down.
+so vim, htop, less, tmux work. **Multi-pane**: splits (⌘D / File menu), native
+macOS tabs (⌘T), multiple windows (⌘N) — each pane its own shell. Typing `exit`
+(or any shell EOF) closes that pane; the bridge reaps the shell via the native
+`waitChild` builtin and shuts down.
 
 ```
  keyboard ─▶ Obj-C shim ─(pipe)▶ kryoterm -i ─(pty)▶ /bin/zsh
@@ -79,7 +81,10 @@ macho backend gains `objc_msgSend`/AppKit FFI.
 | ⌘C / ⌘V / ⌘A | copy selection / bracketed paste / select all |
 | ⌘F · ⌘G · ⌘⇧G | find in scrollback · next · prev |
 | ⌘K | clear screen + scrollback |
-| ⌘N / ⌘Q | new window / quit |
+| ⌘N / ⌘T | new window / new tab |
+| ⌘D / ⌘⇧D | split right / split down (File menu: also left / up) |
+| ⌘W / ⌘⇧W / ⌘⌥W | close pane / close window / close all |
+| ⌘Q | quit |
 | ⌘+ / ⌘− / ⌘0 | font zoom in / out / reset |
 | ⌘↑ / ⌘↓ | scrollback page up / down |
 | ⌘Home / ⌘End | scrollback top / back to live |
