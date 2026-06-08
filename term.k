@@ -217,7 +217,7 @@ func gridNew(cols, rows) {
     let grid = _blankRow(cols)
     let rr = 1
     while rr < rows { grid = grid + _blankRow(cols)  rr = rr + 1 }
-    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0" + fromCharCode(1)
+    emit grid + _fill1(total) + _fill1(total) + "|0,0,257,0,0,257,0,0,0,0" + fromCharCode(1)
 }
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
@@ -240,6 +240,8 @@ func gridFeed(state, s, cols, rows) {
     let scc = _cf(tail, 4)               // saved cursor col
     let spen = _cf(tail, 5)              // saved colour pen
     let pw = _cf(tail, 6)                // pending wrap (deferred auto-margin)
+    let mlevel = _cf(tail, 8)            // mouse tracking: 0 off, 1 click, 2 drag, 3 any-motion
+    let msgr = _cf(tail, 9)              // mouse SGR(1006) encoding on/off (persist)
     let scrolled = ""                    // rows scrolled off THIS feed (reset each call)
     let bell = 0                         // bare BEL (0x07) seen THIS feed (reset each call)
     let n = len(s)
@@ -298,6 +300,17 @@ func gridFeed(state, s, cols, rows) {
                             let o1 = cr * cols + a
                             attr = substring(attr, 0, o1) + _fill1(cnt) + substring(attr, o1 + cnt, total)
                             battr = substring(battr, 0, o1) + _fill1(cnt) + substring(battr, o1 + cnt, total)
+                        }
+                        if fin == 104 || fin == 108 {    // 'h' DECSET / 'l' DECRST (private '?' modes)
+                            if len(params) > 0 && charCode(substring(params, 0, 1)) == 63 {
+                                let mode = _leadInt(substring(params, 1, len(params)), 0)
+                                let on = 0
+                                if fin == 104 { on = 1 }
+                                if mode == 1000 { if on == 1 { mlevel = 1 } else { mlevel = 0 } }  // click
+                                if mode == 1002 { if on == 1 { mlevel = 2 } else { mlevel = 0 } }  // button-drag
+                                if mode == 1003 { if on == 1 { mlevel = 3 } else { mlevel = 0 } }  // any-motion
+                                if mode == 1006 { msgr = on }                                      // SGR encoding
+                            }
                         }
                         i = j + 1
                     }
@@ -372,7 +385,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + fromCharCode(1) + scrolled
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + fromCharCode(1) + scrolled
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
@@ -509,6 +522,16 @@ func gridCursor(state, cols, rows) {
     let total = cols * rows
     let tail = substring(state, 7 * total + 1, len(state))
     emit _cf(tail, 0) + "," + _cf(tail, 1)
+}
+
+// gridMouse(state, cols, rows) — "mlevel,msgr": the app's mouse tracking level
+// (0 off / 1 click / 2 drag / 3 any-motion) and SGR(1006) encoding flag.
+func gridMouse(state, cols, rows) {
+    let total = cols * rows
+    let tailFull = substring(state, 7 * total + 1, len(state))
+    let sohp = indexOf(tailFull, fromCharCode(1))
+    let tail = substring(tailFull, 0, sohp)
+    emit _cf(tail, 8) + "," + _cf(tail, 9)
 }
 
 // gridBell(state, cols, rows) — 1 if a bare BEL (0x07) arrived during the last

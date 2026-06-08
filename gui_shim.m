@@ -31,6 +31,10 @@ static int   gCols = 104, gRows = 30;    // current grid size (set on resize)
 static int   gScrollOff = 0, gScrollMax = 0;   // scrollback view position
 static int   gMatchRow = -1, gMatchCol = 0, gMatchLen = 0;   // find highlight (view-relative)
 static int   gMatchNum = 0, gMatchTotal = 0;                 // "N of M" matches
+static int   gMouseLevel = 0, gMouseSgr = 0;                 // app mouse tracking + SGR encoding
+static BOOL  gMouseReporting = NO;                           // current drag is a reported mouse press
+static int   gLastMouseR = -1, gLastMouseC = -1;            // throttle motion reports
+static int   gMousePressBtn = 0;                            // button held (for the release report)
 static NSTextField *gSearchField;        // ⌘F search bar
 static NSTextField *gSearchCount;        // "N/M" match counter
 static NSString *gExecPath, *gKPath;     // for ⌘N (re-launch self)
@@ -272,6 +276,13 @@ static void sendScrollbackCap(void) {
     int lines = (int)(acc / gLineH);
     if (lines == 0) return;
     acc -= lines * gLineH;
+    if (gMouseLevel > 0 && !(e.modifierFlags & NSEventModifierFlagShift)) {   // report wheel to the app
+        int r, c; [self pointToCell:e row:&r col:&c];
+        int btn = (lines > 0 ? 64 : 65) + [self mouseModsFor:e];
+        int n = lines > 0 ? lines : -lines;
+        for (int i = 0; i < n && i < 8; i++) [self sendMouseButton:btn row:r col:c press:YES];
+        return;
+    }
     char buf[32];
     if (lines > 0) snprintf(buf, sizeof buf, "\036U,%d\036", lines);    // up into history
     else           snprintf(buf, sizeof buf, "\036D,%d\036", -lines);   // back toward live
@@ -362,9 +373,41 @@ static void sendScrollbackCap(void) {
             [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path]];
     }
 }
+// ---- mouse reporting (X10 / SGR-1006) for TUIs that enable it ----
+- (void)sendMouseButton:(int)btn row:(int)r col:(int)c press:(BOOL)press {
+    if (gMaster < 0 || r < 0 || c < 0) return;
+    int cx = c + 1, cy = r + 1;
+    if (gMouseSgr) {
+        char buf[48];
+        snprintf(buf, sizeof buf, "\033[<%d;%d;%d%c", btn, cx, cy, press ? 'M' : 'm');
+        write(gMaster, buf, strlen(buf));
+    } else {
+        int eb = press ? btn : 3;                       // X10 release = all-buttons (3)
+        int bx = cx + 32, by = cy + 32; if (bx > 255) bx = 255; if (by > 255) by = 255;
+        unsigned char x10[6] = { 0x1b, '[', 'M', (unsigned char)(eb + 32), (unsigned char)bx, (unsigned char)by };
+        write(gMaster, x10, 6);
+    }
+}
+- (int)mouseModsFor:(NSEvent *)e {
+    int m = 0;
+    if (e.modifierFlags & NSEventModifierFlagShift)   m += 4;
+    if (e.modifierFlags & NSEventModifierFlagOption)  m += 8;
+    if (e.modifierFlags & NSEventModifierFlagControl) m += 16;
+    return m;
+}
+// Report to the app if it's tracking + Shift isn't held (Shift = local selection). Returns YES if reported.
+- (BOOL)reportMouse:(NSEvent *)e button:(int)base press:(BOOL)press {
+    if (gMouseLevel <= 0 || (e.modifierFlags & NSEventModifierFlagShift)) return NO;
+    int r, c; [self pointToCell:e row:&r col:&c];
+    gMousePressBtn = base + [self mouseModsFor:e];
+    [self sendMouseButton:gMousePressBtn row:r col:c press:press];
+    gLastMouseR = r; gLastMouseC = c;
+    return YES;
+}
 - (void)mouseDown:(NSEvent *)e {
     int r, c; [self pointToCell:e row:&r col:&c];
     if (e.modifierFlags & NSEventModifierFlagCommand) { [self openUrlAtRow:r col:c]; return; }  // ⌘-click opens URLs
+    if ([self reportMouse:e button:0 press:YES]) { gMouseReporting = YES; return; }             // app wants the mouse
     if (e.modifierFlags & NSEventModifierFlagShift) {           // shift-click extends from the anchor
         gSelER = r; gSelEC = c; gHasSel = (gSelER != gSelAR || gSelEC != gSelAC);
         [self setNeedsDisplay:YES]; return;
@@ -375,15 +418,36 @@ static void sendScrollbackCap(void) {
     [self setNeedsDisplay:YES];
 }
 - (void)mouseDragged:(NSEvent *)e {
+    if (gMouseReporting) {                       // motion reports for 1002/1003
+        if (gMouseLevel >= 2) {
+            int r, c; [self pointToCell:e row:&r col:&c];
+            if (r != gLastMouseR || c != gLastMouseC) {
+                [self sendMouseButton:32 + gMousePressBtn row:r col:c press:YES];
+                gLastMouseR = r; gLastMouseC = c;
+            }
+        }
+        return;
+    }
     [self pointToCell:e row:&gSelER col:&gSelEC];
     gHasSel = (gSelER != gSelAR || gSelEC != gSelAC);
     [self setNeedsDisplay:YES];
 }
 - (void)mouseUp:(NSEvent *)e {
+    if (gMouseReporting) { [self sendMouseButton:gMousePressBtn row:gLastMouseR col:gLastMouseC press:NO]; gMouseReporting = NO; return; }
     if (gCopyOnSelect && gHasSel) [self copySelection];
 }
-- (void)otherMouseDown:(NSEvent *)e {       // middle-click pastes
-    if (e.buttonNumber == 2) [self pasteClipboard];
+- (void)otherMouseDown:(NSEvent *)e {
+    if ([self reportMouse:e button:(e.buttonNumber == 2 ? 1 : 2) press:YES]) { gMouseReporting = YES; return; }
+    if (e.buttonNumber == 2) [self pasteClipboard];   // middle-click paste (when not reporting)
+}
+- (void)otherMouseUp:(NSEvent *)e {
+    if (gMouseReporting) { [self sendMouseButton:gMousePressBtn row:gLastMouseR col:gLastMouseC press:NO]; gMouseReporting = NO; }
+}
+- (void)rightMouseDown:(NSEvent *)e {
+    if ([self reportMouse:e button:2 press:YES]) gMouseReporting = YES;
+}
+- (void)rightMouseUp:(NSEvent *)e {
+    if (gMouseReporting) { [self sendMouseButton:gMousePressBtn row:gLastMouseR col:gLastMouseC press:NO]; gMouseReporting = NO; }
 }
 // drag-and-drop files -> insert their (shell-quoted) paths
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)s { return NSDragOperationCopy; }
@@ -628,20 +692,21 @@ static void restartBlink(void) {
                         NSUInteger k = 1;
                         while (k < len && p[k] != 1) k++;
                         if (k < len) {
-                            // header = row,col,scrollOff,scrollMax,matchRow,matchCol,matchLen,matchNum,matchTotal,bell,title
-                            int fv[10] = {0,0,0,0,0,0,0,0,0,0}; int neg[10] = {0,0,0,0,0,0,0,0,0,0};
+                            // header = row,col,scrollOff,scrollMax,mr,mc,ml,num,total,bell,mlevel,msgr,title
+                            int fv[12] = {0,0,0,0,0,0,0,0,0,0,0,0}; int neg[12] = {0,0,0,0,0,0,0,0,0,0,0,0};
                             int field = 0; NSUInteger titleStart = 0;
                             for (NSUInteger m = 1; m < k; m++) {
-                                if (p[m] == ',') { field++; if (field == 10) { titleStart = m+1; break; } }
-                                else if (field < 10) {
+                                if (p[m] == ',') { field++; if (field == 12) { titleStart = m+1; break; } }
+                                else if (field < 12) {
                                     if (p[m] == '-') neg[field] = 1;
                                     else if (p[m] >= '0' && p[m] <= '9') fv[field] = fv[field]*10 + (p[m]-'0');
                                 }
                             }
-                            for (int q = 0; q < 10; q++) if (neg[q]) fv[q] = -fv[q];
+                            for (int q = 0; q < 12; q++) if (neg[q]) fv[q] = -fv[q];
                             gCurRow = fv[0]; gCurCol = fv[1]; gScrollOff = fv[2]; gScrollMax = fv[3];
                             gMatchRow = fv[4]; gMatchCol = fv[5]; gMatchLen = fv[6];
                             gMatchNum = fv[7]; gMatchTotal = fv[8];
+                            gMouseLevel = fv[10]; gMouseSgr = fv[11];
                             if (fv[9] == 1) {                       // bell
                                 if (gBellMode == 2) NSBeep();
                                 else if (gBellMode == 1) {
