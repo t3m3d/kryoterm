@@ -757,7 +757,8 @@ int main(int argc, const char *argv[]) {
         [gSearchCount setAutoresizingMask:(NSViewMinXMargin | NSViewMaxYMargin)];
         [gView addSubview:gSearchCount];
         [win setInitialFirstResponder:gView];
-        [win center];
+        if (![win setFrameUsingName:@"kryotermMain"]) [win center];   // restore last frame, else centre
+        [win setFrameAutosaveName:@"kryotermMain"];                   // persist size+position
         [win makeKeyAndOrderFront:nil];
         [win orderFrontRegardless];
         [NSApp activateIgnoringOtherApps:YES];
