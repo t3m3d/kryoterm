@@ -475,12 +475,10 @@ static void restartBlink(void) {
     NSMutableData *frame = [NSMutableData data];
     unsigned char buf[8192];
     ssize_t got;
-    int nframes = 0;
     while ((got = read(gReadFd, buf, sizeof(buf))) > 0) {
         for (ssize_t i = 0; i < got; i++) {
             if (buf[i] == 0x0c) {                       // form feed -> frame boundary
                 NSData *snapshot = [frame copy];
-                nframes++;
                 dispatch_async(dispatch_get_main_queue(), ^{
                     // Strip the SOH-delimited header: SOH "row,col,title" SOH ...
                     NSData *body = snapshot;
