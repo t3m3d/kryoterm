@@ -82,8 +82,12 @@ font_family      = JetBrainsMono Nerd Font Mono
 font_size        = 13
 opacity          = 1.0          # 0.2–1.0, translucent bg (text stays opaque)
 padding          = 6
+line_spacing     = 0            # extra px between rows
 copy_on_select   = false        # auto-copy selection; middle-click pastes
+scrollback_lines = 2000
 ```
+
+`⌘A` selects all · `⌘-click` opens underlined URLs · ⇧PageUp/Down also scrolls.
 
 ## Why this exists
 
