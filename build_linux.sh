@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# build_linux.sh — build kryoterm on Linux (x86_64 / aarch64).
+# build_linux.sh — build stem on Linux (x86_64 / aarch64).
 #
 # Pure-Krypton build path: kcc.sh compiles run.k to a static,
 # syscall-only ELF. No gcc / cmake / clang invocation at user-build
 # time — once kcc itself is bootstrapped (one-time, in the krypton
-# repo), every kryoterm rebuild is pure-Krypton.
+# repo), every stem rebuild is pure-Krypton.
 #
 # Usage:
-#   ./build_linux.sh             # builds ./kryoterm from run.k
+#   ./build_linux.sh             # builds ./stem from run.k
 #   ./build_linux.sh --run       # ... then runs it once
 #   ./build_linux.sh --ks        # builds the KryptScript entry instead
-#                                # (run.ks → ./kryoterm)
+#                                # (run.ks → ./stem)
 
 set -euo pipefail
 
@@ -45,7 +45,7 @@ for arg in "$@"; do
     esac
 done
 
-OUT="$SCRIPT_DIR/kryoterm"
+OUT="$SCRIPT_DIR/stem"
 
 echo "build_linux.sh: $SRC -> $OUT"
 "${KCC[@]}" --native "$SRC" -o "$OUT"

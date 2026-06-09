@@ -1,4 +1,4 @@
-// run.ks — kryoterm KryptScript front-end.
+// run.ks — stem KryptScript front-end.
 //
 // User-facing entry point. Parses argv, loads config (later), picks
 // the command to spawn, delegates to the compiled core in run.k.
@@ -13,7 +13,7 @@
 import "./run.k"
 
 just run {
-    let cmd = "echo 'hello from kryoterm via the KryptScript entry'"
+    let cmd = "echo 'hello from stem via the KryptScript entry'"
     let n = argCount()
     if n > 1 {
         cmd = arg(1)
@@ -23,6 +23,6 @@ just run {
             i += 1
         }
     }
-    print("kryoterm: spawning -> " + cmd)
-    kryoterm_loop(cmd)
+    print("stem: spawning -> " + cmd)
+    stem_loop(cmd)
 }

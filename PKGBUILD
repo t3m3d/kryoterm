@@ -1,10 +1,10 @@
 # Maintainer: Brian <brian@krypton-lang.org>
-pkgname=kryoterm
+pkgname=stem
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Krypton-native terminal emulator (no Qt, no GTK, no libX11 — speaks the X11 wire protocol directly)"
 arch=('x86_64' 'aarch64')
-url="https://github.com/t3m3d/kryoterm"
+url="https://github.com/t3m3d/stem"
 license=('MIT')
 depends=()                          # static syscall-only ELF
 makedepends=('git')                 # plus krypton (see below)
@@ -29,11 +29,11 @@ build() {
     cd "$srcdir/$pkgname"
     local kcc; kcc=$(_find_kcc) || return 1
     msg2 "compiling via $kcc"
-    "$kcc" -o "$srcdir/kryoterm" run.k
+    "$kcc" -o "$srcdir/stem" run.k
 }
 
 package() {
-    install -Dm755 "$srcdir/kryoterm" "$pkgdir/usr/bin/kryoterm"
+    install -Dm755 "$srcdir/stem" "$pkgdir/usr/bin/stem"
     install -Dm644 "$srcdir/$pkgname/LICENSE" \
         "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 "$srcdir/$pkgname/README.md" \

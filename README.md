@@ -1,4 +1,4 @@
-# kryoterm — Krypton-native terminal
+# stem — Krypton-native terminal
 
 A terminal emulator whose **engine is pure Krypton** — no C, no C++, no Qt/GTK.
 The shell, the pseudo-terminal, and the ANSI/grid renderer are all native
@@ -19,38 +19,38 @@ macOS tabs (⌘T), multiple windows (⌘N) — each pane its own shell. Typing `
 `waitChild` builtin and shuts down.
 
 ```
- keyboard ─▶ Obj-C shim ─(pipe)▶ kryoterm -i ─(pty)▶ /bin/zsh
- window   ◀─ Obj-C shim ◀(frames)─ kryoterm -i ◀──────  (term.k grid)
+ keyboard ─▶ Obj-C shim ─(pipe)▶ stem -i ─(pty)▶ /bin/zsh
+ window   ◀─ Obj-C shim ◀(frames)─ stem -i ◀──────  (term.k grid)
 ```
 
 ## Install (macOS, Apple Silicon)
 
 ```bash
 brew tap t3m3d/krypton          # once
-brew install kryoterm           # the `kryoterm` command -> run it to open a window
-brew install --cask kryoterm    # OR a clickable kryoterm.app in /Applications
+brew install stem           # the `stem` command -> run it to open a window
+brew install --cask stem    # OR a clickable stem.app in /Applications
 ```
 
 The cask app is ad-hoc signed (not notarized) — first launch, right-click → Open
-(or `xattr -dr com.apple.quarantine /Applications/kryoterm.app`).
+(or `xattr -dr com.apple.quarantine /Applications/stem.app`).
 
 Self-contained — no krypton runtime dependency. A
 [JetBrainsMono Nerd Font](https://www.nerdfonts.com/) is recommended for the
-powerline/icon glyphs (configurable in `~/.config/kryoterm/config`).
+powerline/icon glyphs (configurable in `~/.config/stem/config`).
 
 ## Build from source
 
 ```bash
 ./gui.sh          # builds the shim if needed, launches the windowed terminal
-./build_app.sh    # assemble kryoterm.app — then double-click in Finder / Spotlight
+./build_app.sh    # assemble stem.app — then double-click in Finder / Spotlight
 ```
 
-`gui.sh` runs `kryoterm-gui` (the Obj-C shim) against the pure-Krypton
-`kryoterm` binary. To rebuild the pieces:
+`gui.sh` runs `stem-gui` (the Obj-C shim) against the pure-Krypton
+`stem` binary. To rebuild the pieces:
 
 ```bash
-./build_gui.sh    # clang -framework Cocoa -fobjc-arc  gui_shim.m -o kryoterm-gui
-# kryoterm itself is built from run.k with the Krypton macho driver (kcc --native)
+./build_gui.sh    # clang -framework Cocoa -fobjc-arc  gui_shim.m -o stem-gui
+# stem itself is built from run.k with the Krypton macho driver (kcc --native)
 ```
 
 macOS + Apple Silicon. A [JetBrainsMono Nerd Font](https://www.nerdfonts.com/)
@@ -94,7 +94,7 @@ macho backend gains `objc_msgSend`/AppKit FFI.
 
 ## Config
 
-`~/.config/kryoterm/config` (auto-created, hot-reloads on window focus):
+`~/.config/stem/config` (auto-created, hot-reloads on window focus):
 
 ```ini
 titlebar_light   = #2b2b2b      # dark grey in light mode, …
@@ -119,7 +119,7 @@ scrollback_lines = 2000
 ## Why this exists
 
 Krypton's whole point is escaping the C/C++/Qt stack — static, syscall-only
-binaries with zero non-Krypton runtime deps. kryoterm proves a *terminal* can be
+binaries with zero non-Krypton runtime deps. stem proves a *terminal* can be
 built that way: the engine already is. The only non-Krypton code is the macOS
 window shim, kept deliberately small and marked for deletion once AppKit FFI
 lands in the backend. (A Linux window path — `stdlib/x11.k`/Wayland — is the

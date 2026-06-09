@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# make_icon.sh — render kryoterm.icns from make_icon.m (each size drawn crisp).
+# make_icon.sh — render stem.icns from make_icon.m (each size drawn crisp).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 clang -framework Cocoa -fobjc-arc -O2 -w make_icon.m -o make_icon
 
-ICONSET=/tmp/kryoterm.iconset
+ICONSET=/tmp/stem.iconset
 rm -rf "$ICONSET"; mkdir -p "$ICONSET"
 while read -r sz name; do
   [ -n "$sz" ] && ./make_icon "$ICONSET/$name" "$sz" 2>/dev/null
@@ -22,5 +22,5 @@ done <<'SIZES'
 1024 icon_512x512@2x.png
 SIZES
 
-iconutil -c icns "$ICONSET" -o kryoterm.icns
-echo "built kryoterm.icns ($(du -h kryoterm.icns | cut -f1))"
+iconutil -c icns "$ICONSET" -o stem.icns
+echo "built stem.icns ($(du -h stem.icns | cut -f1))"

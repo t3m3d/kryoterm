@@ -1,4 +1,4 @@
-// term.k — kryoterm grid driver (pure Krypton terminal core, phase 4).
+// term.k — stem grid driver (pure Krypton terminal core, phase 4).
 //
 // Maintains a rows×cols cell grid with a cursor and ACTS on the common VT
 // sequences — cursor positioning (CUP/CUU/CUD/CUF/CUB), erase (ED/EL), CR/LF/
@@ -22,7 +22,7 @@
 // only charCode/substring/len/sbAppend/fromCharCode — verified native builtins
 // (k:map is broken on macho). No C, no FFI, no maps.
 
-module kryoterm_term
+module stem_term
 
 // _isLetter(code) — CSI final byte is an ASCII letter.
 func _isLetter(c) {

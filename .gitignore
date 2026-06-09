@@ -1,5 +1,5 @@
-kryoterm
-kryoterm.exe
+stem
+stem.exe
 *.o
 *.obj
 *.exe.manifest
@@ -7,11 +7,11 @@ kryoterm.exe
 build-linux/
 *.log
 
-kryoterm-gui
-kryoterm
-kryoterm.app/
+stem-gui
+stem
+stem.app/
 /make_icon
 .DS_Store
 /releases/
-/kryoterm
-/kryoterm-gui
+/stem
+/stem-gui

@@ -1,4 +1,4 @@
-// ansi.k — kryoterm ANSI/VT escape-sequence parser (pure Krypton).
+// ansi.k — stem ANSI/VT escape-sequence parser (pure Krypton).
 //
 // The terminal CORE, platform-independent: it turns a raw child byte stream
 // into clean printable text by recognizing and consuming escape sequences
@@ -12,7 +12,7 @@
 // No C, no FFI: only charCode/substring/len/sbAppend, all native macho/elf
 // builtins. Verified on macOS arm64.
 
-module kryoterm_ansi
+module stem_ansi
 
 // NOTE: module-level `let` does not survive the import boundary on the native
 // pipeline (stateless-module convention), so ESC (27) / BEL (7) are inlined.

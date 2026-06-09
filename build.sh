@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# build.sh — build kryoterm (macOS arm64 / Linux x86_64). Pure Krypton: the
+# build.sh — build stem (macOS arm64 / Linux x86_64). Pure Krypton: the
 # kcc driver compiles run.ks to a native, syscall-only binary. No gcc / clang /
 # cmake at build time once kcc itself is installed.
 #
 # Usage:
-#   ./build.sh             # build ./kryoterm from run.ks (the KryptScript entry)
+#   ./build.sh             # build ./stem from run.ks (the KryptScript entry)
 #   ./build.sh --run       # ... then run it once
 #   ./build.sh --k         # build run.k directly instead of run.ks
 #
@@ -44,7 +44,7 @@ for arg in "$@"; do
     esac
 done
 
-OUT="$SCRIPT_DIR/kryoterm"
+OUT="$SCRIPT_DIR/stem"
 echo "build.sh: $SRC -> $OUT"
 "${KCC[@]}" --native "$SRC" -o "$OUT"
 

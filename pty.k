@@ -1,4 +1,4 @@
-// pty.k — kryoterm PTY engine (pure Krypton, macOS).
+// pty.k — stem PTY engine (pure Krypton, macOS).
 //
 // Spawns a real shell on a pseudo-terminal and talks to it over the master fd.
 // Built on the macho backend's native pty/fd syscall builtins (no C, no libc):
@@ -8,10 +8,10 @@
 //                              gets the child pid
 //   fdRead(fd, n) / fdWrite(fd, s, len) / fdClose(fd)   read/write/close any fd
 //
-// This is what turns kryoterm from an echo box into a real terminal: a live
+// This is what turns stem from an echo box into a real terminal: a live
 // interactive shell whose output streams back through term.k's grid driver.
 
-module kryoterm_pty
+module stem_pty
 
 // ptyOpen(shellPath) — allocate a pty, spawn `shellPath` on its slave, return
 // the master fd. Read the shell's output with ptyRead(m); send it input with

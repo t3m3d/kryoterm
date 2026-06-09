@@ -1,13 +1,13 @@
-// gui_shim.m — kryoterm GUI surface (TEMPORARY Obj-C shim), multi-pane edition.
+// gui_shim.m — stem GUI surface (TEMPORARY Obj-C shim), multi-pane edition.
 //
-// The kryoterm ENGINE is pure Krypton (term.k grid + `kryoterm -i` pty bridge,
+// The stem ENGINE is pure Krypton (term.k grid + `stem -i` pty bridge,
 // driven by macho syscall builtins). This shim is the ONE non-Krypton piece: it
 // opens windows, draws the framed grid term.k emits, and forwards keys — the bit
 // the macho backend can't do yet (no objc_msgSend FFI). Delete when that lands.
 //
 // Architecture: one process -> N windows (native macOS tabs share a
 // tabbingIdentifier) -> each window is a tree of NSSplitView panes -> each pane
-// (KryptonView) owns its own `kryoterm -i` engine on two pipes, its own reader
+// (KryptonView) owns its own `stem -i` engine on two pipes, its own reader
 // thread, and its own per-pane state. AppKit's first-responder routes keys to the
 // focused pane. Config + font + colours are process-shared.
 //
@@ -38,11 +38,11 @@ static CGFloat gLineSpacing = 0;
 static int gBellMode = 1;
 static NSString *gExecPath, *gKPath;
 static NSMutableArray *gPanes;     // all live KryptonView panes (blink + cleanup)
-static NSString *gAppName = @"kryoterm";   // from CFBundleName; drives title/menu/help (kryoterm, kcode, …)
+static NSString *gAppName = @"stem";   // from CFBundleName; drives title/menu/help (stem, kcode, …)
 
 static void glog(const char *fmt, ...) {
     static FILE *f = NULL;
-    if (!f) f = fopen("/tmp/kryoterm-gui.log", "w");
+    if (!f) f = fopen("/tmp/stem-gui.log", "w");
     if (!f) return;
     va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
     fputc('\n', f); fflush(f);
@@ -66,13 +66,13 @@ static void loadConfig(void) {
     gCursorColor = hexColor("#d8dad4", nil);  gCursorStyle = 0;
     gFontName = @"JetBrainsMono Nerd Font Mono";  gFontSize = 13;  gOpacity = 1.0;
     kPadX = 6;  kPadY = 4;  gCopyOnSelect = NO;  gScrollbackLines = 2000;  gLineSpacing = 0;  gBellMode = 1;
-    NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/kryoterm"];
+    NSString *dir  = [NSHomeDirectory() stringByAppendingPathComponent:@".config/stem"];
     NSString *path = [dir stringByAppendingPathComponent:@"config"];
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:path]) {
         [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
         NSString *def =
-          @"# kryoterm config — colours as #RRGGBB.\n"
+          @"# stem config — colours as #RRGGBB.\n"
            "titlebar_light   = #2b2b2b\n"
            "titlebar_dark    = #000000\n"
            "background_light = #2b2b2b\n"
@@ -624,7 +624,7 @@ static NSWindow *makeWindow(void) {
     [win setTitle:gAppName];
     [win setContentMinSize:NSMakeSize(240, 140)];
     win.tabbingMode = NSWindowTabbingModeAutomatic;
-    win.tabbingIdentifier = @"kryoterm";
+    win.tabbingIdentifier = @"stem";
     win.releasedWhenClosed = NO;
     applyWindowChrome(win);
     NSView *root = [[NSView alloc] initWithFrame:frame];
@@ -893,7 +893,7 @@ static void buildMenu(void) {
     NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
     mi=[helpMenu addItemWithTitle:[gAppName stringByAppendingString:@" Help"] action:@selector(openHelpPage:) keyEquivalent:@"?"]; mi.target=gController;
     [helpMenu addItem:[NSMenuItem separatorItem]];
-    mi=[helpMenu addItemWithTitle:@"kryoterm on GitHub" action:@selector(openGitHub:) keyEquivalent:@""]; mi.target=gController;
+    mi=[helpMenu addItemWithTitle:@"stem on GitHub" action:@selector(openGitHub:) keyEquivalent:@""]; mi.target=gController;
     [helpItem setSubmenu:helpMenu];
     [NSApp setMainMenu:mainMenu];
     [NSApp setWindowsMenu:winMenu];
@@ -913,7 +913,7 @@ int main(int argc, const char *argv[]) {
         const char *kp0;
         if (argc > 1) kp0 = argv[1];
         else { NSString *here=[[NSString stringWithUTF8String:argv[0]] stringByDeletingLastPathComponent];
-               kp0 = strdup([[here stringByAppendingPathComponent:@"kryoterm"] fileSystemRepresentation]); }
+               kp0 = strdup([[here stringByAppendingPathComponent:@"stem"] fileSystemRepresentation]); }
 
         NSString *bn = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"];
         if (bn.length) gAppName = bn;
@@ -933,11 +933,11 @@ int main(int argc, const char *argv[]) {
         gExecPath = abspath(argv[0]);
         gKPath = abspath(kp0);
         // host app may launch a bundled program (e.g. kcode) instead of the shell;
-        // resolve a relative KRYOTERM_EXEC against the engine's own directory.
-        const char *kx = getenv("KRYOTERM_EXEC");
+        // resolve a relative STEM_EXEC against the engine's own directory.
+        const char *kx = getenv("STEM_EXEC");
         if (kx && kx[0] && kx[0] != '/') {
             NSString *abs = [[gKPath stringByDeletingLastPathComponent] stringByAppendingPathComponent:[NSString stringWithUTF8String:kx]];
-            setenv("KRYOTERM_EXEC", [abs fileSystemRepresentation], 1);
+            setenv("STEM_EXEC", [abs fileSystemRepresentation], 1);
         }
         const char *home = getenv("HOME"); if (home) chdir(home);
 

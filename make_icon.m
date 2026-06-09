@@ -1,11 +1,11 @@
-// make_icon.m — render the kryoterm app icon (dark squircle, green prompt
+// make_icon.m — render the stem app icon (dark squircle, green prompt
 // chevron, light cursor). Usage: make_icon <out.png> [size]
 //   clang -framework Cocoa make_icon.m -o make_icon && ./make_icon icon.png 1024
 #import <Cocoa/Cocoa.h>
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        const char *out = (argc > 1) ? argv[1] : "kryoterm_icon.png";
+        const char *out = (argc > 1) ? argv[1] : "stem_icon.png";
         CGFloat S = (argc > 2) ? atof(argv[2]) : 1024;
 
         NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]

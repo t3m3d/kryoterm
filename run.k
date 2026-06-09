@@ -1,27 +1,27 @@
-// run.k — kryoterm core (phase 3: real PTY).
+// run.k — stem core (phase 3: real PTY).
 //
 // The PTY engine landed 2026-06-07: native pty/fd syscall builtins in the
 // Krypton macho backend (ptyMaster/ptySlaveName/ptyForkExec, fdRead/fdWrite/
-// fdClose, fdSetNonblock, sleepUs). kryoterm now spawns a real shell on a
+// fdClose, fdSetNonblock, sleepUs). stem now spawns a real shell on a
 // pseudo-terminal, runs commands, and renders the live output through the grid
 // driver — all in pure Krypton, no C. The only thing left for a windowed
 // terminal is the GUI surface (objc FFI, separate track); the headless engine
 // is complete.
 
-module kryoterm
+module stem
 
 import "./pty.k"     // PTY engine wrapper (ptyOpen/Read/Write/Drain/Close)
 import "./term.k"    // grid driver (renderGrid — ANSI/cursor/erase -> text)
 
 // Open a real pty and spawn `shellPath` on it. Returns the master fd.
-func kryoterm_spawn(shellPath) {
+func stem_spawn(shellPath) {
     emit ptyOpen(shellPath)
 }
 
 // Run `cmd` in a fresh shell on a pty; return the raw terminal byte stream.
 // Non-blocking + 5ms-paced reads (ptyDrain) so slow output lands without
 // hanging or busy-spinning.
-func kryoterm_run(shellPath, cmd) {
+func stem_run(shellPath, cmd) {
     let nl = fromCharCode(10)
     let m = ptyOpen(shellPath)
     ptySetNonblock(m)
@@ -33,16 +33,16 @@ func kryoterm_run(shellPath, cmd) {
 }
 
 // Render raw terminal output through the grid (cols x rows).
-func kryoterm_render(raw, cols, rows) {
+func stem_render(raw, cols, rows) {
     print(renderGrid(raw, cols, rows))
     emit 0
 }
 
 // Phase-3 loop: run `cmd` in a shell on a pty, render the session in the grid.
 // (run.ks passes a parsed argv command here.)
-func kryoterm_loop(cmd) {
-    let raw = kryoterm_run("/bin/zsh", cmd)
-    kryoterm_render(raw, 80, 24)
+func stem_loop(cmd) {
+    let raw = stem_run("/bin/zsh", cmd)
+    stem_render(raw, 80, 24)
     emit 0
 }
 
@@ -52,7 +52,7 @@ func kryoterm_loop(cmd) {
 // whole frame is written to stdout (prefixed with a form-feed, the shim's
 // "clear and redraw" marker). Runs until the process is killed (window close) —
 // macho has no waitpid builtin to detect shell exit. cols×rows fixed at 80×24.
-func kryoterm_interactive(shellPath, cols, rows) {
+func stem_interactive(shellPath, cols, rows) {
     // Spawn the user's real shell so it sources ~/.zshrc — their prompt, history,
     // aliases. (Earlier we used `zsh -f` for a clean prompt, but the user wants
     // their config.) term.k handles enough VT (incl ESC7/8 cursor save/restore)
@@ -246,17 +246,17 @@ func kryoterm_interactive(shellPath, cols, rows) {
 }
 
 // Entry when run.k is the build target directly. `-i` = interactive bridge mode
-// (the GUI shim runs `kryoterm -i`); otherwise a one-shot demo session.
+// (the GUI shim runs `stem -i`); otherwise a one-shot demo session.
 just run {
     let n = argCount()
     if n >= 1 && arg(0) == "-i" {
-        let prog = environ("KRYOTERM_EXEC")        // host app can launch any program (e.g. kcode)
+        let prog = environ("STEM_EXEC")        // host app can launch any program (e.g. kcode)
         if prog == "" { prog = "/bin/zsh" }
-        kryoterm_interactive(prog, 104, 30)
+        stem_interactive(prog, 104, 30)
     } else {
-        print("kryoterm — pure-Krypton terminal (live PTY engine)")
+        print("stem — pure-Krypton terminal (live PTY engine)")
         print("--------------------------------------------------")
-        kryoterm_loop("uname -srm; pwd; echo kryoterm-ok")
+        stem_loop("uname -srm; pwd; echo stem-ok")
         print("--------------------------------------------------")
     }
 }
