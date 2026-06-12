@@ -41,16 +41,17 @@ powerline/icon glyphs (configurable in `~/.config/stem/config`).
 ## Build from source
 
 ```bash
-./gui.sh          # builds the shim if needed, launches the windowed terminal
-./build_app.sh    # assemble stem.app — then double-click in Finder / Spotlight
+kcc -r gui.ks          # builds the shim if needed, launches the windowed terminal
+kcc -r build_app.ks    # assemble stem.app — then double-click in Finder / Spotlight
 ```
 
-`gui.sh` runs `stem-gui` (the Obj-C shim) against the pure-Krypton
-`stem` binary. To rebuild the pieces:
+`gui.ks` runs `stem-gui` (the Obj-C shim) against the pure-Krypton
+`stem` binary. The build scripts are KryptScript (`.ks`, run with `kcc -r`),
+not shell. To rebuild the pieces:
 
 ```bash
-./build_gui.sh    # clang -framework Cocoa -fobjc-arc  gui_shim.m -o stem-gui
-# stem itself is built from run.k with the Krypton macho driver (kcc --native)
+kcc -r build_gui.ks    # clang -framework Cocoa -fobjc-arc  gui_shim.m -o stem-gui
+kcc -r build.ks        # stem engine from run.ks (kcc --native, pure Krypton)
 ```
 
 macOS + Apple Silicon. A [JetBrainsMono Nerd Font](https://www.nerdfonts.com/)
@@ -79,18 +80,18 @@ macho backend gains `objc_msgSend`/AppKit FFI.
 That FFI has landed (the **objk** Objective-C FFI in the Krypton macho backend +
 `stdlib/cocoa.k`). `stem.ks` is the full GUI written in **pure Krypton** —
 window, custom `NSView` `drawRect:` grid render, `keyDown:` → pty, and the
-`NSTimer`/event-pump read loop — replacing `gui_shim.m` / `build_gui.sh`. The
+`NSTimer`/event-pump read loop — replacing `gui_shim.m` / `build_gui.ks`. The
 built app links only `libobjc` + `Foundation` + `AppKit`; no clang, no Obj-C.
 
 ```bash
-KRYPTON_ROOT=/path/to/krypton ./build_objk.sh   # → dist/stem.app
+KRYPTON_ROOT=/path/to/krypton kcc -r build_objk.ks   # → dist/stem.app
 open dist/stem.app
 ```
 
 Needs a Krypton **dev checkout** (`compiler/macos_arm64/{kcc-arm64,macho_host}` +
 `stdlib` + `headers`) — objk is newer than the released `kcc`, so a published
 Homebrew `kcc` can't build it until a Krypton release ships the objk backend.
-`build_objk.sh` rebuilds `macho_host` from the backend if it's stale, then
+`build_objk.ks` rebuilds `macho_host` from the backend if it's stale, then
 compiles `stem.ks` straight to a `.app`. Verify it's C-free:
 `otool -L dist/stem.app/Contents/MacOS/stem`.
 

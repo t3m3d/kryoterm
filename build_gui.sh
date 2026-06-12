@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-# build_gui.sh — compile the TEMPORARY stem GUI shim (Obj-C/Cocoa).
-# The terminal engine is pure Krypton; this only opens a window + draws.
-# Delete once objc_msgSend FFI lands in the Krypton macho backend.
-set -euo pipefail
-SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-clang -framework Cocoa -framework Contacts -framework ContactsUI -fobjc-arc -O2 -Wall "$SCRIPT_DIR/gui_shim.m" -o "$SCRIPT_DIR/stem-gui"
-echo "build_gui.sh: built ./stem-gui"
