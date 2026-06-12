@@ -21,21 +21,48 @@ func isExec(p) { emit trim(exec("test -x \"" + p + "\" && echo yes || echo no"))
 just run {
     let kcc = environ("KCC")
     if kcc == "" {
-        let onPath = trim(exec("command -v kcc.exe 2>/dev/null"))
+        // POSIX `command -v` doesn't exist on cmd.exe -- it prints
+        // "The system cannot find the path specified." to stdout (NOT
+        // stderr), which 2>/dev/null can't filter, so the resolution
+        // would land on a garbage string and every later exec would
+        // fail with "'The' is not recognized".  Use `where` (Windows
+        // built-in) which prints the path or returns non-zero with no
+        // stdout if the binary isn't found.
+        let onPath = trim(exec("where kcc.exe 2>NUL"))
         if onPath != "" { kcc = onPath } else { kcc = "C:/krypton/kcc.exe" }
     }
     let out = "stem.exe"
     let manifest = "stem_win.exe.manifest"
 
     kp("[1/3] kcc compile -> " + out)
-    let c = exec("\"" + kcc + "\" stem_win.ks -o \"" + out + "\" 2>&1")
+    // Krypton's exec() on Windows wraps the command in `cmd /c "..."`; if WE
+    // also quote the kcc path here (`"C:/krypton/kcc.exe"`), cmd sees
+    // `cmd /c ""C:/krypton/kcc.exe" stem_win.ks ..."` and the double-double-
+    // quote at the start makes cmd reinterpret "stem_win.ks" as the command
+    // name -> "'The' is not recognized" and no stem.exe gets produced.
+    // Leave kcc unquoted (path is always Windows-friendly, no spaces).
+    // No 2>&1 -- on Windows, Krypton's exec wraps in cmd /c "...", and
+    // trailing `2>&1` against that wrapper made cmd reinterpret kcc's stderr
+    // text as a fresh command ("'The' is not recognized ...").
+    let c = exec(kcc + " stem_win.ks -o " + out)
     if c != "" { kp(c) }
+    // Fail loudly if the compile didn't drop the binary, rather than
+    // pretending later steps succeeded.
+    let check = trim(exec("test -f " + out + " && echo ok || echo no"))
+    if check != "ok" { kp("FAIL: " + out + " not produced -- aborting")  exit(1) }
 
     kp("[2/3] patch PE Subsystem CUI->GUI")
     // PE header offset = u32 LE at file offset 0x3c (60). Subsystem u16 lives at
     // peOff + 24 (COFF header) + 0x44 (offset of Subsystem in the optional hdr).
-    let peOff = trim(exec("od -An -tu4 -j60 -N4 \"" + out + "\" | tr -d ' '"))
-    exec("printf '\\002\\000' | dd of=\"" + out + "\" bs=1 seek=$((" + peOff + "+92)) conv=notrunc 2>/dev/null")
+    // Krypton's exec uses cmd.exe on Windows -- it doesn't expand
+    // POSIX `$((x+y))` (dd would see the literal `$((...))` and reject
+    // it) and it mangles the printf single-quoted-escape `'\\002\\000'`
+    // (printf gets the wrong bytes, dd appears to succeed but no byte
+    // gets flipped).  Force a real shell with `bash -c "..."` so the
+    // pipe + printf escapes + arithmetic all work.
+    let peOff = trim(exec("bash -c \"od -An -tu4 -j60 -N4 " + out + " | tr -d ' '\""))
+    let seek = toStr(toInt(peOff) + 92)
+    exec("bash -c \"printf '\\\\002\\\\000' | dd of=" + out + " bs=1 seek=" + seek + " conv=notrunc 2>/dev/null\"")
     kp("  subsystem -> 2 (Windows GUI)")
 
     kp("[3/3] copy manifest sidecar")
