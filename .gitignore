@@ -15,3 +15,9 @@ stem.app/
 /releases/
 /stem
 /stem-gui
+
+# objk build outputs
+dist/
+kryoterm
+kryoterm-gui
+kryoterm.app/
