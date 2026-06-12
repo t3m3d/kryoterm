@@ -18,17 +18,30 @@ just run {
     let seed = "kcc_driver_linux_x86_64"
     if os == "Darwin" { seed = "kcc_driver_macos_aarch64" }
 
-    let kcc = "kcc"
-    if has("kcc") != "yes" {
-        let root = environ("KRYPTON_ROOT")
-        if root == "" { root = "../krypton" }
+    // Toolchain resolution, in priority order:
+    //   1. an explicit KRYPTON_ROOT checkout's driver — wins over PATH so a stale
+    //      brew `kcc` can't shadow a current repo,
+    //   2. `kcc` on PATH,
+    //   3. a default ../krypton checkout.
+    let kcc = ""
+    let root = environ("KRYPTON_ROOT")
+    if root != "" {
         let seedPath = root + "/bootstrap/" + seed
-        if isExec(seedPath) != "yes" {
-            kp("build.ks: no 'kcc' on PATH and no " + seedPath)
-            kp("  Install Krypton (brew install t3m3d/krypton/krypton) or set KRYPTON_ROOT.")
-            emit 1
+        if isExec(seedPath) == "yes" { kcc = "env KRYPTON_ROOT=\"" + root + "\" \"" + seedPath + "\"" }
+    }
+    if kcc == "" {
+        if has("kcc") == "yes" {
+            kcc = "kcc"
+        } else {
+            let r = "../krypton"
+            let seedPath = r + "/bootstrap/" + seed
+            if isExec(seedPath) != "yes" {
+                kp("build.ks: no 'kcc' on PATH and no " + seedPath)
+                kp("  Install Krypton (brew install t3m3d/krypton/krypton) or set KRYPTON_ROOT.")
+                emit 1
+            }
+            kcc = "env KRYPTON_ROOT=\"" + r + "\" \"" + seedPath + "\""
         }
-        kcc = "env KRYPTON_ROOT=\"" + root + "\" \"" + seedPath + "\""
     }
 
     let src = "run.ks"

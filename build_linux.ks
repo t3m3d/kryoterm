@@ -15,17 +15,30 @@ func has(cmd) { emit trim(exec("command -v " + cmd + " >/dev/null 2>&1 && echo y
 func isExec(p) { emit trim(exec("test -x \"" + p + "\" && echo yes || echo no")) }
 
 just run {
-    let kcc = "kcc"
-    if has("kcc") != "yes" {
-        let root = environ("KRYPTON_ROOT")
-        if root == "" { root = "../krypton" }
+    // Toolchain resolution, in priority order:
+    //   1. an explicit KRYPTON_ROOT checkout's driver — wins over PATH so a stale
+    //      brew `kcc` (e.g. 2.0.0) can't shadow a current repo,
+    //   2. `kcc` on PATH,
+    //   3. a default ../krypton checkout.
+    let kcc = ""
+    let root = environ("KRYPTON_ROOT")
+    if root != "" {
         let seedPath = root + "/bootstrap/kcc_driver_linux_x86_64"
-        if isExec(seedPath) != "yes" {
-            kp("build_linux.ks: no 'kcc' on PATH and no " + seedPath)
-            kp("  Set KRYPTON_ROOT to your krypton checkout, or install Krypton.")
-            emit 1
+        if isExec(seedPath) == "yes" { kcc = "env KRYPTON_ROOT=\"" + root + "\" \"" + seedPath + "\"" }
+    }
+    if kcc == "" {
+        if has("kcc") == "yes" {
+            kcc = "kcc"
+        } else {
+            let r = "../krypton"
+            let seedPath = r + "/bootstrap/kcc_driver_linux_x86_64"
+            if isExec(seedPath) != "yes" {
+                kp("build_linux.ks: no 'kcc' on PATH and no " + seedPath)
+                kp("  Set KRYPTON_ROOT to your krypton checkout, or install Krypton.")
+                emit 1
+            }
+            kcc = "env KRYPTON_ROOT=\"" + r + "\" \"" + seedPath + "\""
         }
-        kcc = "env KRYPTON_ROOT=\"" + root + "\" \"" + seedPath + "\""
     }
 
     let src = "run.k"
