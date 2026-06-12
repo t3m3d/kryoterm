@@ -1,10 +1,10 @@
-// kryoterm — pure-Krypton terminal on objk, term.k grid render. No Obj-C source.
+// stem v2 — pure-Krypton terminal on objk, term.k grid render. No Obj-C source.
 import "k:cocoa"
 import "k:objc"
 import "head:cocoa"
 import "head:objc"
 
-// term.k — kryoterm grid driver (pure Krypton terminal core, phase 4).
+// term.k — stem grid driver (pure Krypton terminal core, phase 4).
 //
 // Maintains a rows×cols cell grid with a cursor and ACTS on the common VT
 // sequences — cursor positioning (CUP/CUU/CUD/CUF/CUB), erase (ED/EL), CR/LF/
@@ -758,7 +758,7 @@ func cubeLvl(v) { if v == 0 { emit 0 }  emit v * 40 + 55 }
 
 // True 256-colour index -> NSColor (exact RGB): 0-15 ANSI palette, 16-231 the
 // 6x6x6 cube, 232-255 greyscale ramp.
-// ── config (~/.config/kryoterm/config, simple key = value) ─────────────────
+// ── config (~/.config/stem/config, simple key = value) ─────────────────
 func cfgVal(cfg, key, def) {
   let n = len(cfg)  let i = 0  let ls = 0
   while i <= n {
@@ -911,7 +911,7 @@ func renderSnapshot(snap, deflt, font, cr, cc) {
 
 // ── menu handlers ───────────────────────────────────────────────────────
 func stemMaster() { emit cocoaNumberVal(cocoaGetAssocKey(appH(), "stem.master")) }
-func onStemNewWin(self, cmd, sender) { exec("open -na kryoterm")  emit "1" }
+func onStemNewWin(self, cmd, sender) { exec("open -na stem")  emit "1" }
 func onStemClear(self, cmd, sender)  { fdWrite(stemMaster(), fromCharCode(12), 1)  emit "1" }
 func onStemPaste(self, cmd, sender)  { let s = exec("pbpaste")  fdWrite(stemMaster(), s, len(s))  emit "1" }
 func onStemReset(self, cmd, sender)  { let s = "reset\n"  fdWrite(stemMaster(), s, len(s))  emit "1" }
@@ -927,17 +927,17 @@ func onStemZoomIn(self, cmd, sender)    { let s = cocoaNumberVal(cocoaGetAssocKe
 func onStemZoomOut(self, cmd, sender)   { let s = cocoaNumberVal(cocoaGetAssocKey(appH(), "stem.fontsize")) - 1  if s < 7 { s = 7 }  cocoaSetAssocKey(appH(), "stem.fontsize", cocoaNumber(s))  stemApplyFont() }
 func onStemZoomReset(self, cmd, sender) { cocoaSetAssocKey(appH(), "stem.fontsize", cocoaNumber(13))  stemApplyFont() }
 func onStemFull(self, cmd, sender)      { msg_1(cocoaGetAssocKey(appH(), "stem.win"), "toggleFullScreen:", 0)  emit "1" }
-func onStemHelp(self, cmd, sender)      { exec("open https://krypton-lang.org/programs/kryoterm.html")  emit "1" }
-func onStemConfig(self, cmd, sender)    { exec("open -t \"" + environ("HOME") + "/.config/kryoterm/config\"")  emit "1" }
+func onStemHelp(self, cmd, sender)      { exec("open https://krypton-lang.org/programs/stem.html")  emit "1" }
+func onStemConfig(self, cmd, sender)    { exec("open -t \"" + environ("HOME") + "/.config/stem/config\"")  emit "1" }
 func onStemReload(self, cmd, sender) {
-  let cfg = readFile(environ("HOME") + "/.config/kryoterm/config")
+  let cfg = readFile(environ("HOME") + "/.config/stem/config")
   cocoaSetAssocKey(appH(), "stem.fontsize", cocoaNumber(toInt(cfgVal(cfg, "font_size", "13"))))
   cocoaSetAssocKey(appH(), "stem.fontfam", nsString(cfgVal(cfg, "font", "JetBrainsMono Nerd Font Mono")))
   stemApplyFont()
-  msg_1(cocoaGetAssocKey(appH(), "stem.win"), "setTitle:", nsString(cfgVal(cfg, "title", "kryoterm")))
+  msg_1(cocoaGetAssocKey(appH(), "stem.win"), "setTitle:", nsString(cfgVal(cfg, "title", "stem")))
   emit "1"
 }
-func onStemAbout(self, cmd, sender) { exec("osascript -e 'display dialog \"kryoterm " + fromCharCode(8212) + " a pure-Krypton terminal on the objk Objective-C FFI. No Obj-C source.\\n\\nkrypton-lang.org/programs/kryoterm.html\" buttons {\"OK\"} default button \"OK\" with title \"About kryoterm\"' >/dev/null 2>&1 &")  emit "1" }
+func onStemAbout(self, cmd, sender) { exec("osascript -e 'display dialog \"stem " + fromCharCode(8212) + " a pure-Krypton terminal on the objk Objective-C FFI. No Obj-C source.\\n\\nkrypton-lang.org/programs/stem.html\" buttons {\"OK\"} default button \"OK\" with title \"About stem\"' >/dev/null 2>&1 &")  emit "1" }
 // strip ANSI CSI sequences for plain-text copy
 func stemStripAnsi(s) {
   let out = ""
@@ -968,7 +968,7 @@ func onStemCopy(self, cmd, sender) {
   emit "1"
 }
 func onStemUpdate(self, cmd, sender) {
-  exec("(brew update >/dev/null 2>&1; if brew outdated --cask t3m3d/krypton/kryoterm | grep -q kryoterm; then brew upgrade --cask t3m3d/krypton/kryoterm >/dev/null 2>&1 && osascript -e 'display notification \"Updated kryoterm to the latest version.\" with title \"kryoterm\"'; else osascript -e 'display notification \"kryoterm is up to date.\" with title \"kryoterm\"'; fi) &")
+  exec("(brew update >/dev/null 2>&1; if brew outdated --cask t3m3d/krypton/stem | grep -q stem; then brew upgrade --cask t3m3d/krypton/stem >/dev/null 2>&1 && osascript -e 'display notification \"Updated stem to the latest version.\" with title \"stem\"'; else osascript -e 'display notification \"stem is up to date.\" with title \"stem\"'; fi) &")
   emit "1"
 }
 func onStemSecure(self, cmd, sender) {
@@ -980,7 +980,7 @@ func onStemSecure(self, cmd, sender) {
   emit "1"
 }
 func onStemDefault(self, cmd, sender) {
-  exec("osascript -e 'display dialog \"macOS has no single default-terminal setting. To open shell scripts (.command/.tool) with kryoterm, right-click one " + fromCharCode(8594) + " Get Info " + fromCharCode(8594) + " Open with: kryoterm " + fromCharCode(8594) + " Change All.\" buttons {\"OK\"} default button \"OK\" with title \"Make kryoterm Default Terminal\"' >/dev/null 2>&1 &")
+  exec("osascript -e 'display dialog \"macOS has no single default-terminal setting. To open shell scripts (.command/.tool) with stem, right-click one " + fromCharCode(8594) + " Get Info " + fromCharCode(8594) + " Open with: stem " + fromCharCode(8594) + " Change All.\" buttons {\"OK\"} default button \"OK\" with title \"Make stem Default Terminal\"' >/dev/null 2>&1 &")
   emit "1"
 }
 func brainFlagS(key, def) {
@@ -1170,7 +1170,7 @@ func onMouse(self, cmd, event) {
   cocoaMakeFirstResponder(cocoaGetAssocKey(appH(), "stem.win"), self)
   emit "1"
 }
-func onNewTab(self, cmd, sender)  { exec("open -na kryoterm")  emit "1" }
+func onNewTab(self, cmd, sender)  { exec("open -na stem")  emit "1" }
 func onCloseAll(self, cmd, sender){ msg(appH(), "terminate:")  emit "1" }
 // close focused pane; if last pane, close the window
 func onClosePane(self, cmd, sender) {
@@ -1185,15 +1185,15 @@ func onClosePane(self, cmd, sender) {
 }
 
 func defaultConfig() {
-  emit "# kryoterm config — key = value, # comments. Restart kryoterm to apply.\nshell = /bin/zsh\nfont = JetBrainsMono Nerd Font Mono\nfont_size = 13\ncols = 92\nrows = 28\nwidth = 760\nheight = 500\ntitle = kryoterm\n# colours as #RRGGBB\nfg = #ffffff\nbg = #000000\ncolor0 = #000000\ncolor1 = #cd3131\ncolor2 = #0dbc79\ncolor3 = #e5e510\ncolor4 = #2472c8\ncolor5 = #bc3fbc\ncolor6 = #11a8cd\ncolor7 = #e5e5e5\ncolor8 = #666666\ncolor9 = #f14c4c\ncolor10 = #23d18b\ncolor11 = #f5f567\ncolor12 = #3b8eea\ncolor13 = #d670d6\ncolor14 = #29b8db\ncolor15 = #ffffff\n"
+  emit "# stem config — key = value, # comments. Restart stem to apply.\nshell = /bin/zsh\nfont = JetBrainsMono Nerd Font Mono\nfont_size = 13\ncols = 92\nrows = 28\nwidth = 760\nheight = 500\ntitle = stem\n# colours as #RRGGBB\nfg = #ffffff\nbg = #000000\ncolor0 = #000000\ncolor1 = #cd3131\ncolor2 = #0dbc79\ncolor3 = #e5e510\ncolor4 = #2472c8\ncolor5 = #bc3fbc\ncolor6 = #11a8cd\ncolor7 = #e5e5e5\ncolor8 = #666666\ncolor9 = #f14c4c\ncolor10 = #23d18b\ncolor11 = #f5f567\ncolor12 = #3b8eea\ncolor13 = #d670d6\ncolor14 = #29b8db\ncolor15 = #ffffff\n"
 }
 
 just run {
   // load config (create with defaults on first run)
-  let cfgPath = environ("HOME") + "/.config/kryoterm/config"
+  let cfgPath = environ("HOME") + "/.config/stem/config"
   let cfg = readFile(cfgPath)
   if len(cfg) == 0 {
-    exec("mkdir -p \"" + environ("HOME") + "/.config/kryoterm\"")
+    exec("mkdir -p \"" + environ("HOME") + "/.config/stem\"")
     cfg = defaultConfig()
     writeFile(cfgPath, cfg)
   }
@@ -1211,8 +1211,8 @@ just run {
   // p10k's gitstatusd can't exec under the ad-hoc-signed app bundle (AMFI), so
   // p10k hangs forever waiting for it -> blank prompt. Disable gitstatus +
   // instant-prompt so p10k draws immediately (loses only the git segment).
-  let wrapper = environ("HOME") + "/.config/kryoterm/launch.zsh"
-  writeFile(wrapper, "#!" + shell + "\nexport TERM=xterm-256color\nexport TERM_PROGRAM=kryoterm\nexport POWERLEVEL9K_DISABLE_GITSTATUS=true\nexport POWERLEVEL9K_INSTANT_PROMPT=off\nexec " + shell + " -l\n")
+  let wrapper = environ("HOME") + "/.config/stem/launch.zsh"
+  writeFile(wrapper, "#!" + shell + "\nexport TERM=xterm-256color\nexport TERM_PROGRAM=stem\nexport POWERLEVEL9K_DISABLE_GITSTATUS=true\nexport POWERLEVEL9K_INSTANT_PROMPT=off\nexec " + shell + " -l\n")
   exec("/bin/chmod +x " + wrapper)
 
   // fork ALL 4 pane shells BEFORE cocoaInit + render them warm from frame 0
@@ -1226,23 +1226,23 @@ just run {
   let app = cocoaInit()
   let bar = cocoaMenuBar(app)
   // app menu (system bolds the first menu as the app name)
-  let appMenu = cocoaMenuAdd(bar, "kryoterm")
-  cocoaMenuItem(appMenu, "About kryoterm", "", funcptr(onStemAbout))
+  let appMenu = cocoaMenuAdd(bar, "stem")
+  cocoaMenuItem(appMenu, "About stem", "", funcptr(onStemAbout))
   cocoaMenuItem(appMenu, "Check for Updates", "", funcptr(onStemUpdate))
   cocoaMenuSeparator(appMenu)
   cocoaMenuItem(appMenu, "Settings", ",", funcptr(onStemConfig))
   cocoaMenuItem(appMenu, "Reload Configuration", "", funcptr(onStemReload))
   cocoaMenuItem(appMenu, "Secure Keyboard Entry", "", funcptr(onStemSecure))
-  cocoaMenuItem(appMenu, "Make kryoterm Default Terminal", "", funcptr(onStemDefault))
+  cocoaMenuItem(appMenu, "Make stem Default Terminal", "", funcptr(onStemDefault))
   cocoaMenuSeparator(appMenu)
   let svcMenu = cocoaSubmenuIn(appMenu, "Services")
   msg_1(app, "setServicesMenu:", svcMenu)
   cocoaMenuSeparator(appMenu)
-  cocoaMenuItemSel(appMenu, "Hide kryoterm", "h", "hide:")
+  cocoaMenuItemSel(appMenu, "Hide stem", "h", "hide:")
   cocoaMenuItemSel(appMenu, "Hide Others", "", "hideOtherApplications:")
   cocoaMenuItemSel(appMenu, "Show All", "", "unhideAllApplications:")
   cocoaMenuSeparator(appMenu)
-  cocoaMenuItemSel(appMenu, "Quit kryoterm", "q", "terminate:")
+  cocoaMenuItemSel(appMenu, "Quit stem", "q", "terminate:")
   let fileMenu = cocoaMenuAdd(bar, "File")
   cocoaMenuItem(fileMenu, "New Window", "n", funcptr(onStemNewWin))
   cocoaMenuSeparator(fileMenu)
@@ -1271,7 +1271,7 @@ just run {
   cocoaMenuItemSel(winMenu, "Minimize", "m", "performMiniaturize:")
   cocoaMenuItemSel(winMenu, "Zoom", "", "performZoom:")
   let helpMenu = cocoaMenuAdd(bar, "Help")
-  cocoaMenuItem(helpMenu, "kryoterm on the web", "", funcptr(onStemHelp))
+  cocoaMenuItem(helpMenu, "stem on the web", "", funcptr(onStemHelp))
 
   // palette cache (0-15 from config, 16-255 computed)
   let pal = cocoaArray()
@@ -1299,7 +1299,7 @@ just run {
   }
   cocoaSetAssocKey(app, "stem.pal", pal)
 
-  let win = cocoaWindow(app, cfgVal(cfg, "title", "kryoterm"), width, height)
+  let win = cocoaWindow(app, cfgVal(cfg, "title", "stem"), width, height)
   cocoaSetAssocKey(app, "stem.win", win)
   let mono = cocoaFontFamily(cocoaMonoFont(toInt(cfgVal(cfg, "font_size", "13"))), cfgVal(cfg, "font", "JetBrainsMono Nerd Font Mono"))
   let fg = cfgRGB(cfg, "fg", 255, 255, 255)

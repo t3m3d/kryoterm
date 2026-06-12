@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# build_objk.sh — build the PURE-KRYPTON kryoterm GUI (objk FFI). No Obj-C source.
+# build_objk.sh — build the PURE-KRYPTON stem GUI (objk FFI). No Obj-C source.
 #
 # This replaces the temporary clang shim (build_gui.sh / gui_shim.m): the window,
 # the custom NSView drawRect grid, keyDown->pty, and the NSTimer/pump event loop
-# are all written in Krypton (kryoterm.ks) on the objk Objective-C FFI. The only
+# are all written in Krypton (stem.ks) on the objk Objective-C FFI. The only
 # things linked are the system dylibs libobjc + Foundation + AppKit — verify with
-# `otool -L dist/kryoterm.app/Contents/MacOS/kryoterm`.
+# `otool -L dist/stem.app/Contents/MacOS/stem`.
 #
 # Requires the Krypton dev tree (the objk FFI is newer than the released kcc):
 #   - compiler/macos_arm64/kcc-arm64   (IR frontend)
@@ -16,8 +16,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 KRYPTON_ROOT="${KRYPTON_ROOT:-$(cd .. && pwd)/krypton}"
-SRC="kryoterm.ks"
-NAME="kryoterm"
+SRC="stem.ks"
+NAME="stem"
 
 if [ ! -d "$KRYPTON_ROOT/stdlib" ] || [ ! -x "$KRYPTON_ROOT/compiler/macos_arm64/kcc-arm64" ]; then
   echo "build_objk.sh: KRYPTON_ROOT='$KRYPTON_ROOT' is not a Krypton dev checkout." >&2
@@ -43,16 +43,16 @@ APP="dist/$NAME.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "/tmp/$NAME.bin" "$APP/Contents/MacOS/$NAME"
 chmod +x "$APP/Contents/MacOS/$NAME"
-[ -f kryoterm.icns ] && cp kryoterm.icns "$APP/Contents/Resources/$NAME.icns" || true
+[ -f stem.icns ] && cp stem.icns "$APP/Contents/Resources/$NAME.icns" || true
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>kryoterm</string>
-  <key>CFBundleDisplayName</key><string>kryoterm</string>
-  <key>CFBundleExecutable</key><string>kryoterm</string>
-  <key>CFBundleIdentifier</key><string>org.krypton-lang.kryoterm</string>
-  <key>CFBundleIconFile</key><string>kryoterm</string>
+  <key>CFBundleName</key><string>stem</string>
+  <key>CFBundleDisplayName</key><string>stem</string>
+  <key>CFBundleExecutable</key><string>stem</string>
+  <key>CFBundleIdentifier</key><string>org.krypton-lang.stem</string>
+  <key>CFBundleIconFile</key><string>stem</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>2.0.0</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>

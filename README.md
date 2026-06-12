@@ -77,22 +77,22 @@ macho backend gains `objc_msgSend`/AppKit FFI.
 ## Pure-Krypton GUI (objk — no Obj-C source)
 
 That FFI has landed (the **objk** Objective-C FFI in the Krypton macho backend +
-`stdlib/cocoa.k`). `kryoterm.ks` is the full GUI written in **pure Krypton** —
+`stdlib/cocoa.k`). `stem.ks` is the full GUI written in **pure Krypton** —
 window, custom `NSView` `drawRect:` grid render, `keyDown:` → pty, and the
 `NSTimer`/event-pump read loop — replacing `gui_shim.m` / `build_gui.sh`. The
 built app links only `libobjc` + `Foundation` + `AppKit`; no clang, no Obj-C.
 
 ```bash
-KRYPTON_ROOT=/path/to/krypton ./build_objk.sh   # → dist/kryoterm.app
-open dist/kryoterm.app
+KRYPTON_ROOT=/path/to/krypton ./build_objk.sh   # → dist/stem.app
+open dist/stem.app
 ```
 
 Needs a Krypton **dev checkout** (`compiler/macos_arm64/{kcc-arm64,macho_host}` +
 `stdlib` + `headers`) — objk is newer than the released `kcc`, so a published
 Homebrew `kcc` can't build it until a Krypton release ships the objk backend.
 `build_objk.sh` rebuilds `macho_host` from the backend if it's stale, then
-compiles `kryoterm.ks` straight to a `.app`. Verify it's C-free:
-`otool -L dist/kryoterm.app/Contents/MacOS/kryoterm`.
+compiles `stem.ks` straight to a `.app`. Verify it's C-free:
+`otool -L dist/stem.app/Contents/MacOS/stem`.
 
 ## Shortcuts
 
