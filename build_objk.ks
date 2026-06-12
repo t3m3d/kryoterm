@@ -1,14 +1,13 @@
 // build_objk.ks — build the PURE-KRYPTON stem GUI (objk FFI). No Obj-C source.
 //
-// Replaces the clang shim (build_gui.ks / gui_shim.m): window + custom NSView
-// drawRect grid + keyDown->pty + NSTimer/pump loop are all Krypton (stem.ks) on
-// the objk Objective-C FFI. The built app links only libobjc + Foundation +
-// AppKit — verify: otool -L dist/stem.app/Contents/MacOS/stem
+// Window + custom NSView drawRect grid + keyDown->pty + NSTimer/pump loop are
+// all Krypton (stem.ks) on the objk Objective-C FFI. The built app links only
+// libobjc + Foundation + AppKit — verify: otool -L dist/stem.app/Contents/MacOS/stem
 //
-// Requires the Krypton dev tree (objk is newer than the released kcc):
-//   compiler/macos_arm64/{kcc-arm64,macho_host} + stdlib/cocoa.k + headers.
-// Point KRYPTON_ROOT at it (default: sibling ../krypton).
-//   Run from the repo root:  kcc -r build_objk.ks
+// objk shipped in Krypton 2.4.0, so the installed (released) kcc builds it.
+// KRYPTON_ROOT optionally points at a dev checkout
+// (compiler/macos_arm64/{kcc-arm64,macho_host} + stdlib/cocoa.k + headers);
+// default: sibling ../krypton. Run from the repo root:  kcc -r build_objk.ks
 
 func isExec(p) { emit trim(exec("test -x \"" + p + "\" && echo yes || echo no")) }
 func isFile(p) { emit trim(exec("test -f \"" + p + "\" && echo yes || echo no")) }

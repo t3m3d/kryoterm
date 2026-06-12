@@ -1,11 +1,12 @@
 # stem — Krypton-native terminal
 
-A terminal emulator whose **engine is pure Krypton** — no C, no C++, no Qt/GTK.
-The shell, the pseudo-terminal, and the ANSI/grid renderer are all native
-Krypton (macho backend `svc` syscall builtins + `term.k`). On macOS a thin,
-**temporary** Obj-C/Cocoa shim opens the window and forwards keystrokes — the one
-thing the Krypton backend can't do yet (no `objc_msgSend` FFI). The shim does
-*only* window + draw + keys; everything terminal lives in Krypton.
+A terminal emulator that is **pure Krypton** — no C, no C++, no Qt/GTK, **no
+Obj-C source**. The shell, the pseudo-terminal, the ANSI/grid renderer, AND the
+macOS window/drawing/keyboard are all native Krypton: the engine on the macho
+backend `svc` syscall builtins (`term.k`), and the Cocoa GUI on the **objk**
+Objective-C FFI (`stdlib/cocoa.k` — `NSWindow`, custom `NSView` `drawRect:`,
+`keyDown:` → pty, `NSTimer` pump). The shipped app links only `libobjc` +
+`Foundation` + `AppKit` — verify: `otool -L`.
 
 **Status: working macOS terminal.** Live `/bin/zsh` (sources your `~/.zshrc` —
 powerlevel10k, history, aliases), full colour incl. truecolor, scrollback,
@@ -19,8 +20,8 @@ macOS tabs (⌘T), multiple windows (⌘N) — each pane its own shell. Typing `
 `waitChild` builtin and shuts down.
 
 ```
- keyboard ─▶ Obj-C shim ─(pipe)▶ stem -i ─(pty)▶ /bin/zsh
- window   ◀─ Obj-C shim ◀(frames)─ stem -i ◀──────  (term.k grid)
+ keyboard ─▶ stem.ks keyDown: ─(pty)▶ /bin/zsh
+ window   ◀─ stem.ks drawRect: ◀───── term.k grid ◀── pty  (all pure Krypton / objk)
 ```
 
 ## Install (macOS, Apple Silicon)
@@ -40,19 +41,22 @@ powerline/icon glyphs (configurable in `~/.config/stem/config`).
 
 ## Build from source
 
-```bash
-kcc -r gui.ks          # builds the shim if needed, launches the windowed terminal
-kcc -r build_app.ks    # assemble stem.app — then double-click in Finder / Spotlight
-```
-
-`gui.ks` runs `stem-gui` (the Obj-C shim) against the pure-Krypton
-`stem` binary. The build scripts are KryptScript (`.ks`, run with `kcc -r`),
-not shell. To rebuild the pieces:
+The build scripts are KryptScript (`.ks`, run with `kcc -r`), not shell.
 
 ```bash
-kcc -r build_gui.ks    # clang -framework Cocoa -fobjc-arc  gui_shim.m -o stem-gui
-kcc -r build.ks        # stem engine from run.ks (kcc --native, pure Krypton)
+kcc -r build_objk.ks   # → dist/stem.app (pure Krypton, no Obj-C source)
+open dist/stem.app
 ```
+
+`build_objk.ks` compiles `stem.ks` (window + custom `NSView` `drawRect:` grid +
+`keyDown:` → pty + `NSTimer` pump) straight to a `.app` on the objk FFI; the
+result links only `libobjc`/`Foundation`/`AppKit` (`otool -L` to confirm). Build
+the CLI engine alone with `kcc -r build.ks` (run.ks → `./stem`); the icon with
+`kcc -r make_icon.ks`. Linux/Windows: `build_linux.ks` / `build_windows.ks`.
+
+objk shipped in **Krypton 2.4.0**, so a released `kcc` builds it — no dev
+checkout needed. (`build_objk.ks` honors `KRYPTON_ROOT` for a dev tree if you
+have one; otherwise it uses the installed toolchain.)
 
 macOS + Apple Silicon. A [JetBrainsMono Nerd Font](https://www.nerdfonts.com/)
 is recommended so powerline/icon glyphs render (configurable).
@@ -71,29 +75,9 @@ is recommended so powerline/icon glyphs render (configurable).
   `SOH header SOH grid \f`. Reads keystrokes + control markers (resize / scroll /
   clear / find) back on stdin.
 - **`pty.k`** — pty wrapper. **`ansi.k`** — standalone `stripAnsi`.
-
-The shim (`gui_shim.m`) is explicitly temporary — delete it once the Krypton
-macho backend gains `objc_msgSend`/AppKit FFI.
-
-## Pure-Krypton GUI (objk — no Obj-C source)
-
-That FFI has landed (the **objk** Objective-C FFI in the Krypton macho backend +
-`stdlib/cocoa.k`). `stem.ks` is the full GUI written in **pure Krypton** —
-window, custom `NSView` `drawRect:` grid render, `keyDown:` → pty, and the
-`NSTimer`/event-pump read loop — replacing `gui_shim.m` / `build_gui.ks`. The
-built app links only `libobjc` + `Foundation` + `AppKit`; no clang, no Obj-C.
-
-```bash
-KRYPTON_ROOT=/path/to/krypton kcc -r build_objk.ks   # → dist/stem.app
-open dist/stem.app
-```
-
-Needs a Krypton **dev checkout** (`compiler/macos_arm64/{kcc-arm64,macho_host}` +
-`stdlib` + `headers`) — objk is newer than the released `kcc`, so a published
-Homebrew `kcc` can't build it until a Krypton release ships the objk backend.
-`build_objk.ks` rebuilds `macho_host` from the backend if it's stale, then
-compiles `stem.ks` straight to a `.app`. Verify it's C-free:
-`otool -L dist/stem.app/Contents/MacOS/stem`.
+- **`stem.ks`** — the pure-Krypton Cocoa GUI on the **objk** FFI: `NSWindow`,
+  custom `NSView` `drawRect:` (renders the `term.k` grid), `keyDown:` → pty,
+  `NSTimer`/event-pump read loop, menus. No Obj-C source; see *Build from source*.
 
 ## Shortcuts
 
