@@ -61,6 +61,18 @@ have one; otherwise it uses the installed toolchain.)
 macOS + Apple Silicon. A [JetBrainsMono Nerd Font](https://www.nerdfonts.com/)
 is recommended so powerline/icon glyphs render (configurable).
 
+## Shipping (cask DMG)
+
+```bash
+kcc -r build_dmg.ks <version>          # → dist/stem-<version>.dmg
+```
+
+`build_dmg.ks` builds `stem.app` with the released `kcc` (objk, no Obj-C),
+**fails closed** if the app isn't C-free, then makes the compressed DMG the cask
+ships. With Homebrew `krypton` >= 2.4.0 on PATH it needs no config; otherwise
+point `KRYPTON_ROOT` at a krypton 2.4.0 install. It prints the sha256 + the
+`gh release upload` / `Casks/stem.rb` bump to finish a release.
+
 ## Engine (pure Krypton)
 
 - **`term.k`** — incremental ANSI grid driver. Packed-string state (char +
