@@ -117,8 +117,28 @@ func kColorOf(byteVal, def) {
     emit xterm256rgb(byteVal - 2)
 }
 
+// parse a hex colour string ("CCFFCC" / "#CCFFCC" / "0xCCFFCC") -> 0xRRGGBB; def if blank.
+func hexColor(s, def) {
+    if s == "" { emit def }
+    let h = s
+    if len(h) >= 2 && substring(h, 0, 2) == "0x" { h = substring(h, 2, len(h)) }
+    if len(h) >= 1 && substring(h, 0, 1) == "#" { h = substring(h, 1, len(h)) }
+    let v = 0
+    let i = 0
+    while i < len(h) {
+        let c = toInt(charCode(substring(h, i, i + 1)))
+        let d = 0 - 1
+        if c >= 48 && c <= 57 { d = c - 48 }
+        if c >= 97 && c <= 102 { d = c - 87 }
+        if c >= 65 && c <= 70 { d = c - 55 }
+        if d >= 0 { v = v * 16 + d }
+        i = i + 1
+    }
+    emit v
+}
+
 // ── render: stem grid -> framebuffer, per-cell ANSI colour. Block cursor; bell. ──
-func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell) {
+func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle) {
     let back = bg
     if bell == 1 { back = 3355494 }                 // visual-bell flash
     fbClear(px, W, H, back)
@@ -151,9 +171,19 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell) {
     let cc = toInt(substring(cur, comma + 1, len(cur)))
     if cr >= 0 && cr < rows && cc >= 0 && cc < cols {
         let cx = 4 + cc * 8  let cy = 2 + cr * 16
-        fbFillRect(px, W, cx, cy, 8, 16, fg)
         let cline = getLine(text, cr)
-        if cc < len(cline) { fbDrawChar(px, W, H, font, cx, cy, toInt(charCode(substring(cline, cc, cc + 1))), back) }
+        if curStyle == 1 {                              // bar: 2px at cell left, glyph normal
+            fbFillRect(px, W, cx, cy, 2, 16, curColor)
+            if cc < len(cline) { fbDrawChar(px, W, H, font, cx, cy, toInt(charCode(substring(cline, cc, cc + 1))), fg) }
+        } else {
+            if curStyle == 2 {                          // underline: 2px at cell bottom, glyph normal
+                fbFillRect(px, W, cx, cy + 14, 8, 2, curColor)
+                if cc < len(cline) { fbDrawChar(px, W, H, font, cx, cy, toInt(charCode(substring(cline, cc, cc + 1))), fg) }
+            } else {                                    // block: fill cell, glyph inverted
+                fbFillRect(px, W, cx, cy, 8, 16, curColor)
+                if cc < len(cline) { fbDrawChar(px, W, H, font, cx, cy, toInt(charCode(substring(cline, cc, cc + 1))), back) }
+            }
+        }
     }
 }
 
@@ -175,8 +205,13 @@ just run {
     // ── config ──
     let conf = confLoad()
     let shell = confGet(conf, "shell", "/bin/bash")
-    let bg = 1054753           // 0x101821 dark (0xRRGGBB; fb writes alpha=0)
-    let fg = 13434828          // 0xCCFFCC soft green (the krypton look)
+    let bg = hexColor(confGet(conf, "bg", ""), 1054753)         // 0x101821 dark
+    let fg = hexColor(confGet(conf, "fg", ""), 13434828)        // 0xCCFFCC soft green
+    let curColor = hexColor(confGet(conf, "cursor_color", ""), fg)
+    let curStyleS = confGet(conf, "cursor_style", "block")      // block | bar | underline
+    let curStyle = 0
+    if curStyleS == "bar" { curStyle = 1 }
+    if curStyleS == "underline" { curStyle = 2 }
 
     let W = 800  let H = 480
     let cols = (W - 8) / 8
@@ -350,7 +385,7 @@ just run {
             let fb = memfdCreate(sz)
             let px = mmapShared(fb, sz)
             if scrollOff > 0 { kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) }
-            else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell) }
+            else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle) }
             let didFlash = bell  bell = 0
             wlCreatePool(fd, SHM, pool, fb, sz)
             wlPoolCreateBuffer(fd, pool, buf, 0, W, H, stride, 1)
