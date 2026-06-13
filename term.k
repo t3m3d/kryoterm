@@ -154,6 +154,7 @@ func _applySgr(pen, params) {
                      // 5/6/7 = 38;2 r/g/b ; 8/9/10 = 48;2 r/g/b
     let tr = 0
     let tg = 0
+    let bold = 0     // SGR 1 in this sequence -> promote a standard fg to bright
     while i <= n {
         let sep = 0
         if i == n { sep = 1 }
@@ -171,7 +172,9 @@ func _applySgr(pen, params) {
                 else { if stage == 1 { if cur == 5 { stage = 2 } else { if cur == 2 { stage = 5 } else { stage = 0 } } }
                 else { if stage == 3 { if cur == 5 { stage = 4 } else { if cur == 2 { stage = 8 } else { stage = 0 } } }
                 else {
-                    if cur == 0 { fg = 1  bg = 1 }
+                    if cur == 0 { fg = 1  bg = 1  bold = 0 }
+                    if cur == 1 { bold = 1 }                         // bold/bright
+                    if cur == 22 { bold = 0 }                        // normal intensity
                     if cur == 38 { stage = 1 }
                     if cur == 48 { stage = 3 }
                     if cur == 39 { fg = 1 }
@@ -190,6 +193,7 @@ func _applySgr(pen, params) {
         }
         i = i + 1
     }
+    if bold == 1 && fg >= 2 && fg <= 9 { fg = fg + 8 }   // standard fg 0-7 -> bright 8-15
     emit fg * 256 + bg
 }
 
@@ -515,6 +519,47 @@ func gridRender(state, cols, rows) {
     }
     emit sbToString(out)
 }
+
+// _plainRow / gridPlain — like _renderRow / gridRender but GLYPHS ONLY, no SGR.
+// The Wayland frontend colours each cell from the attr/battr planes, so it needs
+// the glyph stream clean (embedded SGR would draw as text and break column
+// alignment). One byte per ASCII cell keeps column c == byte c.
+func _plainRow(grid, base, cols) {
+    let e = cols
+    let trimming = 1
+    while e > 0 && trimming == 1 {
+        let off = (base + e - 1) * 5
+        let w = charCode(substring(grid, off, off + 1))
+        if w == 1 && substring(grid, off + 1, off + 2) == " " { e = e - 1 }
+        else { trimming = 0 }
+    }
+    let out = sbNew()
+    let col = 0
+    while col < e {
+        let off = (base + col) * 5
+        let w = charCode(substring(grid, off, off + 1))
+        out = sbAppend(out, substring(grid, off + 1, off + 1 + w))
+        col = col + 1
+    }
+    emit sbToString(out)
+}
+func gridPlain(state, cols, rows) {
+    let total = cols * rows
+    let g5 = 5 * total
+    let grid = substring(state, 0, g5)
+    let out = sbNew()
+    let r = 0
+    while r < rows {
+        out = sbAppend(out, _plainRow(grid, r * cols, cols))
+        if r < rows - 1 { out = sbAppend(out, fromCharCode(10)) }
+        r = r + 1
+    }
+    emit sbToString(out)
+}
+
+// gridStripSgr(s) — drop all ESC[…m SGR from a (multi-line) string; public wrapper
+// over _stripSgrLine for the frontend's monochrome scrollback view.
+func gridStripSgr(s) { emit _stripSgrLine(s) }
 
 // gridSafeLen(s) — length of the prefix of s safe to feed: excludes a trailing
 // INCOMPLETE escape sequence or UTF-8 char. The interactive bridge reads the pty

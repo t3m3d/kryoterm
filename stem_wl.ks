@@ -160,7 +160,7 @@ func kSelText(st, cols, rows, sr, sc, er, ec) {
     if r1 > r2 || (r1 == r2 && c1 > c2) {     // normalize so (r1,c1) precedes (r2,c2)
         r1 = er  c1 = ec  r2 = sr  c2 = sc
     }
-    let text = gridRender(st, cols, rows)
+    let text = gridPlain(st, cols, rows)
     if r1 == r2 { emit rtrimLine(kRowSlice(getLine(text, r1), c1, c2 + 1)) }
     let out = rtrimLine(kRowSlice(getLine(text, r1), c1, cols))
     let r = r1 + 1
@@ -191,7 +191,7 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
     let total = cols * rows
     let attr  = substring(st, 5 * total, 6 * total) // per-cell fg index byte
     let battr = substring(st, 6 * total, 7 * total) // per-cell bg index byte
-    let text = gridRender(st, cols, rows)
+    let text = gridPlain(st, cols, rows)
     let r = 0
     while r < rows {
         let line = getLine(text, r)
@@ -241,10 +241,10 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
 // scrolled-off rows are stored as plain text). A "▲" marks we're not at the bottom.
 func kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) {
     fbClear(px, W, H, bg)
-    let view = gridScrollView(scrollback, gridRender(st, cols, rows), rows, scrollOff)
+    let view = gridScrollView(scrollback, gridPlain(st, cols, rows), rows, scrollOff)
     let r = 0
     while r < rows {
-        let line = getLine(view, r)
+        let line = gridStripSgr(getLine(view, r))   // history rows carry SGR; strip for the mono view
         fbDrawText(px, W, H, font, 4, 2 + r * 16, line, fg)
         r = r + 1
     }
