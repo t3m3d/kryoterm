@@ -183,6 +183,48 @@ func kInSel(r, c, cols, sr, sc, er, ec) {
     emit 0
 }
 
+// UTF-8: byte count of a sequence from its lead byte, and codepoint decode.
+// The grid is one CELL per column but a cell may hold a multibyte glyph, so the
+// renderer must walk the row by character (not byte) to keep columns aligned.
+func kUtf8Len(b) {
+    if b < 128 { emit 1 }
+    if b < 224 { emit 2 }
+    if b < 240 { emit 3 }
+    emit 4
+}
+func kUtf8Cp(s, i, cl) {
+    let b0 = toInt(charCode(substring(s, i, i + 1)))
+    if cl == 1 { emit b0 }
+    if cl == 2 {
+        let b1 = toInt(charCode(substring(s, i + 1, i + 2)))
+        emit (b0 - 192) * 64 + (b1 - 128)
+    }
+    if cl == 3 {
+        let b1 = toInt(charCode(substring(s, i + 1, i + 2)))
+        let b2 = toInt(charCode(substring(s, i + 2, i + 3)))
+        emit (b0 - 224) * 4096 + (b1 - 128) * 64 + (b2 - 128)
+    }
+    let c1 = toInt(charCode(substring(s, i + 1, i + 2)))
+    let c2 = toInt(charCode(substring(s, i + 2, i + 3)))
+    let c3 = toInt(charCode(substring(s, i + 3, i + 4)))
+    emit (b0 - 240) * 262144 + (c1 - 128) * 4096 + (c2 - 128) * 64 + (c3 - 128)
+}
+// codepoint of the col-th character in a UTF-8 line (32 = space if past the end)
+func kCharAtCol(line, col) {
+    let n = len(line)
+    let bi = 0
+    let c = 0
+    while bi < n {
+        let lead = toInt(charCode(substring(line, bi, bi + 1)))
+        let cl = kUtf8Len(lead)
+        if bi + cl > n { cl = n - bi }
+        if c == col { emit kUtf8Cp(line, bi, cl) }
+        bi = bi + cl
+        c = c + 1
+    }
+    emit 32
+}
+
 // ── render: stem grid -> framebuffer, per-cell ANSI colour. Block cursor; bell. ──
 func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC) {
     let back = bg
@@ -196,6 +238,7 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
     while r < rows {
         let line = getLine(text, r)
         let llen = len(line)
+        let bi = 0                      // byte cursor into the (possibly multibyte) row
         let c = 0
         while c < cols {
             let idx = r * cols + c
@@ -206,9 +249,13 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
                 cellBg = 3756378            // 0x395A5A selection highlight
             }
             if cellBg != back { fbFillRect(px, W, x, y, 8, 16, cellBg) }
-            if c < llen {
-                let chcode = toInt(charCode(substring(line, c, c + 1)))
+            if bi < llen {
+                let lead = toInt(charCode(substring(line, bi, bi + 1)))
+                let cl = kUtf8Len(lead)
+                if bi + cl > llen { cl = llen - bi }
+                let chcode = kUtf8Cp(line, bi, cl)
                 if chcode != 32 { fbDrawChar(px, W, H, font, x, y, chcode, cellFg) }
+                bi = bi + cl
             }
             c = c + 1
         }
@@ -222,16 +269,17 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
     if cr >= 0 && cr < rows && cc >= 0 && cc < cols {
         let cx = 4 + cc * 8  let cy = 2 + cr * 16
         let cline = getLine(text, cr)
+        let cglyph = kCharAtCol(cline, cc)              // col-th char (UTF-8 aware)
         if curStyle == 1 {                              // bar: 2px at cell left, glyph normal
             fbFillRect(px, W, cx, cy, 2, 16, curColor)
-            if cc < len(cline) { fbDrawChar(px, W, H, font, cx, cy, toInt(charCode(substring(cline, cc, cc + 1))), fg) }
+            if cglyph != 32 { fbDrawChar(px, W, H, font, cx, cy, cglyph, fg) }
         } else {
             if curStyle == 2 {                          // underline: 2px at cell bottom, glyph normal
                 fbFillRect(px, W, cx, cy + 14, 8, 2, curColor)
-                if cc < len(cline) { fbDrawChar(px, W, H, font, cx, cy, toInt(charCode(substring(cline, cc, cc + 1))), fg) }
+                if cglyph != 32 { fbDrawChar(px, W, H, font, cx, cy, cglyph, fg) }
             } else {                                    // block: fill cell, glyph inverted
                 fbFillRect(px, W, cx, cy, 8, 16, curColor)
-                if cc < len(cline) { fbDrawChar(px, W, H, font, cx, cy, toInt(charCode(substring(cline, cc, cc + 1))), back) }
+                if cglyph != 32 { fbDrawChar(px, W, H, font, cx, cy, cglyph, back) }
             }
         }
     }
