@@ -262,6 +262,7 @@ just run {
     let curStyle = 0
     if curStyleS == "bar" { curStyle = 1 }
     if curStyleS == "underline" { curStyle = 2 }
+    let bellMode = confGet(conf, "bell", "visual")             // visual | off
 
     // initial size from config grid (a tiling compositor may override on map).
     let cfgCols = confGetInt(conf, "cols", 100)
@@ -445,7 +446,7 @@ just run {
             let cut = gridSafeLen(chunk)
             if cut > 0 {
                 st = gridFeed(st, substring(chunk, 0, cut), cols, rows)
-                if gridBell(st, cols, rows) == 1 { bell = 1 }
+                if gridBell(st, cols, rows) == 1 { if bellMode == "visual" { bell = 1 } }   // 'off' = ignore
                 let sc = gridScrolled(st, cols, rows)
                 if len(sc) > 0 {
                     scrollback = scrollback + sc
