@@ -194,8 +194,8 @@ just run {
     // ── wayland surface (child already forked: it has no Wayland fd) ──
     let fd = wlConnect()
     if fd < 0 { print("stem: wayland connect failed")  exit("1") }
-    let REG = 2  let COMP = 3  let SHM = 4  let WM = 5  let SEAT = 6  let KB = 7
-    let SURF = 8  let XS = 9  let TOP = 10   // sequential object ids, NO gaps
+    let REG = 2  let COMP = 3  let SHM = 4  let WM = 5  let SEAT = 6  let KB = 7  let PTR = 8
+    let SURF = 9  let XS = 10  let TOP = 11   // sequential object ids, NO gaps
     wlGetRegistry(fd, REG)
     let rb = bufNew(8192)
     let rn = wlRecvInto(fd, rb, 8192)
@@ -204,6 +204,7 @@ just run {
     wlBind(fd, REG, _wlFind(rb, rn, "xdg_wm_base"), "xdg_wm_base", 1, WM)
     wlBind(fd, REG, _wlFind(rb, rn, "wl_seat"), "wl_seat", 5, SEAT)
     wlGetKeyboard(fd, SEAT, KB)
+    wlGetPointer(fd, SEAT, PTR)
     wlCreateSurface(fd, COMP, SURF)
     wlGetXdgSurface(fd, WM, XS, SURF)
     wlGetToplevel(fd, XS, TOP)
@@ -219,7 +220,7 @@ just run {
     let st = gridNew(cols, rows)
 
     let shift = 0  let ctrl = 0
-    let nextId = 11  let prevBuf = 0  let prevPool = 0  let prevMfd = 0
+    let nextId = 12  let prevBuf = 0  let prevPool = 0  let prevMfd = 0
     let dirty = 1  let running = 1  let configured = 0
     let title = "stem"  let bell = 0
     let pending = ""        // partial escape/UTF-8 carried between reads
@@ -276,10 +277,36 @@ just run {
                             if scrollOff < 0 { scrollOff = 0 }
                             dirty = 1
                         } else {
-                            if scrollOff != 0 { scrollOff = 0  dirty = 1 }   // any other key jumps back to live
-                            let bytes = kKeyBytes(kc, shift, ctrl)
-                            if bytes != "" { fdWrite(m, bytes, len(bytes)) }
+                            // paste: Ctrl-Shift-V (kc 55) or Shift-Insert (kc 118)
+                            let isPaste = 0
+                            if ctrl == 1 && shift == 1 && kc == 55 { isPaste = 1 }
+                            if shift == 1 && kc == 118 { isPaste = 1 }
+                            if isPaste == 1 {
+                                let clip = exec("wl-paste -n 2>/dev/null")
+                                if len(clip) > 0 { fdWrite(m, clip, len(clip)) }
+                                if scrollOff != 0 { scrollOff = 0  dirty = 1 }
+                            } else {
+                                if scrollOff != 0 { scrollOff = 0  dirty = 1 }   // any other key jumps back to live
+                                let bytes = kKeyBytes(kc, shift, ctrl)
+                                if bytes != "" { fdWrite(m, bytes, len(bytes)) }
+                            }
                         } }
+                    }
+                }
+                if obj == PTR && op == 4 {                   // wl_pointer.axis (scroll wheel)
+                    let ax = wlU32(eb, off + 12)             // 0 = vertical
+                    if ax == 0 {
+                        let msb = toInt(bufGetByte(eb, off + 19))   // sign byte of the wl_fixed value (LE MSB)
+                        if msb >= 128 {                      // negative -> wheel up -> into history
+                            scrollOff = scrollOff + 3
+                            let maxOff = toInt(lineCount(scrollback))
+                            if scrollOff > maxOff { scrollOff = maxOff }
+                            dirty = 1
+                        } else {                             // positive -> wheel down -> toward live
+                            scrollOff = scrollOff - 3
+                            if scrollOff < 0 { scrollOff = 0 }
+                            dirty = 1
+                        }
                     }
                 }
                 off = off + s
