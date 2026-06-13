@@ -354,6 +354,16 @@ func kUtf8Cp(s, i, cl) {
     let c3 = toInt(charCode(substring(s, i + 3, i + 4)))
     emit (b0 - 240) * 262144 + (c1 - 128) * 4096 + (c2 - 128) * 64 + (c3 - 128)
 }
+// decode the codepoint stored in a grid cell (buffer gb, byte offset off, width w).
+func kCellCp(gb, off, w) {
+    let b0 = toInt(bufGetByte(gb, off + 1))
+    if w == 1 { emit b0 }
+    if w == 2 { emit (b0 - 192) * 64 + (toInt(bufGetByte(gb, off + 2)) - 128) }
+    if w == 3 { emit (b0 - 224) * 4096 + (toInt(bufGetByte(gb, off + 2)) - 128) * 64 + (toInt(bufGetByte(gb, off + 3)) - 128) }
+    let c1 = toInt(bufGetByte(gb, off + 2))  let c2 = toInt(bufGetByte(gb, off + 3))  let c3 = toInt(bufGetByte(gb, off + 4))
+    emit (b0 - 240) * 262144 + (c1 - 128) * 4096 + (c2 - 128) * 64 + (c3 - 128)
+}
+
 // codepoint of the col-th character in a UTF-8 line (32 = space if past the end)
 func kCharAtCol(line, col) {
     let n = len(line)
@@ -376,15 +386,13 @@ func kDrawScreen(px, W, H, font, gb, ab, bb, meta, cols, rows, bg, fg, bell, cur
     if bell == 1 { back = 3355494 }                 // visual-bell flash
     fbClear(px, W, H, back)
     let total = cols * rows
-    let text = gridPlainB(gb, cols, rows)
+    // read every cell straight from the plane buffers — no per-frame string alloc.
     let r = 0
     while r < rows {
-        let line = getLine(text, r)
-        let llen = len(line)
-        let bi = 0                      // byte cursor into the (possibly multibyte) row
         let c = 0
         while c < cols {
             let idx = r * cols + c
+            let off = idx * 5
             let x = 4 + c * 8  let y = 2 + r * 16
             let cellFg = kColorOf(toInt(bufGetByte(ab, idx)), fg, pal)
             let cellBg = kColorOf(toInt(bufGetByte(bb, idx)), back, pal)
@@ -392,14 +400,9 @@ func kDrawScreen(px, W, H, font, gb, ab, bb, meta, cols, rows, bg, fg, bell, cur
                 cellBg = 3756378            // 0x395A5A selection highlight
             }
             if cellBg != back { fbFillRect(px, W, x, y, 8, 16, cellBg) }
-            if bi < llen {
-                let lead = toInt(charCode(substring(line, bi, bi + 1)))
-                let cl = kUtf8Len(lead)
-                if bi + cl > llen { cl = llen - bi }
-                let chcode = kUtf8Cp(line, bi, cl)
-                if chcode != 32 { fbDrawChar(px, W, H, font, x, y, chcode, cellFg) }
-                bi = bi + cl
-            }
+            let w = toInt(bufGetByte(gb, off))
+            let chcode = kCellCp(gb, off, w)
+            if chcode != 32 { fbDrawChar(px, W, H, font, x, y, chcode, cellFg) }
             c = c + 1
         }
         r = r + 1
@@ -411,8 +414,8 @@ func kDrawScreen(px, W, H, font, gb, ab, bb, meta, cols, rows, bg, fg, bell, cur
     let cc = toInt(substring(cur, comma + 1, len(cur)))
     if cr >= 0 && cr < rows && cc >= 0 && cc < cols {
         let cx = 4 + cc * 8  let cy = 2 + cr * 16
-        let cline = getLine(text, cr)
-        let cglyph = kCharAtCol(cline, cc)              // col-th char (UTF-8 aware)
+        let coff = (cr * cols + cc) * 5
+        let cglyph = kCellCp(gb, coff, toInt(bufGetByte(gb, coff)))   // cursor cell glyph (from buffer)
         let cstyle = curStyle                            // app DECSCUSR overrides the config default
         let appShape = gridCshapeM(meta)
         if appShape == 1 { cstyle = 1 }                 // bar
