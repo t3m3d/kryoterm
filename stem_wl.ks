@@ -270,11 +270,16 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
         let cx = 4 + cc * 8  let cy = 2 + cr * 16
         let cline = getLine(text, cr)
         let cglyph = kCharAtCol(cline, cc)              // col-th char (UTF-8 aware)
-        if curStyle == 1 {                              // bar: 2px at cell left, glyph normal
+        let cstyle = curStyle                            // app DECSCUSR overrides the config default
+        let appShape = gridCshape(st, cols, rows)
+        if appShape == 1 { cstyle = 1 }                 // bar
+        if appShape == 2 { cstyle = 0 }                 // block
+        if appShape == 3 { cstyle = 2 }                 // underline
+        if cstyle == 1 {                                // bar: 2px at cell left, glyph normal
             fbFillRect(px, W, cx, cy, 2, 16, curColor)
             if cglyph != 32 { fbDrawChar(px, W, H, font, cx, cy, cglyph, fg) }
         } else {
-            if curStyle == 2 {                          // underline: 2px at cell bottom, glyph normal
+            if cstyle == 2 {                            // underline: 2px at cell bottom, glyph normal
                 fbFillRect(px, W, cx, cy + 14, 8, 2, curColor)
                 if cglyph != 32 { fbDrawChar(px, W, H, font, cx, cy, cglyph, fg) }
             } else {                                    // block: fill cell, glyph inverted

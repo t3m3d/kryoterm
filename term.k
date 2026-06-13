@@ -673,6 +673,15 @@ func gridCursor(state, cols, rows) {
     emit _cf(tail, 0) + "," + _cf(tail, 1)
 }
 
+// gridCshape(state, cols, rows) — app-requested cursor shape (DECSCUSR): 0 = use
+// the config default, 1 = bar, 2 = block, 3 = underline.
+func gridCshape(state, cols, rows) {
+    let total = cols * rows
+    let tailFull = substring(state, 7 * total + 1, len(state))
+    let tail = substring(tailFull, 0, indexOf(tailFull, fromCharCode(1)))
+    emit _cf(tail, 14)
+}
+
 // gridMouse(state, cols, rows) — "mlevel,msgr": the app's mouse tracking level
 // (0 off / 1 click / 2 drag / 3 any-motion) and SGR(1006) encoding flag.
 func gridMouse(state, cols, rows) {
