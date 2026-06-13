@@ -310,6 +310,10 @@ func gridFeed(state, s, cols, rows) {
                         if fin == 66 { cr = _clamp(cr + p0, 0, rows - 1) }   // down
                         if fin == 67 { cc = _clamp(cc + p0, 0, cols - 1) }   // forward
                         if fin == 68 { cc = _clamp(cc - p0, 0, cols - 1) }   // back
+                        if fin == 71 || fin == 96 { cc = _clamp(p0 - 1, 0, cols - 1) }   // 'G'/'`' CHA: cursor to column
+                        if fin == 100 { cr = _clamp(p0 - 1, 0, rows - 1) }   // 'd' VPA: cursor to row
+                        if fin == 69 { cr = _clamp(cr + p0, 0, rows - 1)  cc = 0  pw = 0 }   // 'E' CNL: next line, col 0
+                        if fin == 70 { cr = _clamp(cr - p0, 0, rows - 1)  cc = 0  pw = 0 }   // 'F' CPL: prev line, col 0
                         if fin == 109 { pen = _applySgr(pen, params) }       // 'm' SGR colour
                         if fin == 115 { scr = cr  scc = cc  spen = pen }     // 's' save cursor
                         if fin == 117 { cr = scr  cc = scc  pen = spen }     // 'u' restore cursor
@@ -409,6 +413,10 @@ func gridFeed(state, s, cols, rows) {
                         } else {
                             if k == 55 { scr = cr  scc = cc  spen = pen }    // ESC 7 save cursor
                             if k == 56 { cr = scr  cc = scc  pen = spen }    // ESC 8 restore cursor
+                            if k == 99 {                                     // ESC c = RIS full reset
+                                grid = _blankRow(total)  attr = _fill1(total)  battr = _fill1(total)
+                                cr = 0  cc = 0  pen = 257  pw = 0  g0gfx = 0  altActive = 0
+                            }
                             i = i + 2                        // ESC x (2-byte)
                         }
                     }
