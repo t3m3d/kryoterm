@@ -137,8 +137,54 @@ func hexColor(s, def) {
     emit v
 }
 
+// strip trailing spaces from one line (terminal selection copies rtrimmed rows).
+func rtrimLine(s) {
+    let n = len(s)
+    while n > 0 && substring(s, n - 1, n) == " " { n = n - 1 }
+    emit substring(s, 0, n)
+}
+
+// row-major slice of one line from column a (inclusive) to b (exclusive), clamped.
+func kRowSlice(line, a, b) {
+    let ln = len(line)
+    let lo = a   if lo < 0 { lo = 0 }   if lo > ln { lo = ln }
+    let hi = b   if hi < 0 { hi = 0 }   if hi > ln { hi = ln }
+    if hi <= lo { emit "" }
+    emit substring(line, lo, hi)
+}
+
+// extract selected text from the live grid for range (sr,sc)..(er,ec), inclusive
+// of the end cell. Multi-row joins with '\n'; each row is rtrimmed.
+func kSelText(st, cols, rows, sr, sc, er, ec) {
+    let r1 = sr  let c1 = sc  let r2 = er  let c2 = ec
+    if r1 > r2 || (r1 == r2 && c1 > c2) {     // normalize so (r1,c1) precedes (r2,c2)
+        r1 = er  c1 = ec  r2 = sr  c2 = sc
+    }
+    let text = gridRender(st, cols, rows)
+    if r1 == r2 { emit rtrimLine(kRowSlice(getLine(text, r1), c1, c2 + 1)) }
+    let out = rtrimLine(kRowSlice(getLine(text, r1), c1, cols))
+    let r = r1 + 1
+    while r < r2 {
+        out = out + fromCharCode(10) + rtrimLine(getLine(text, r))
+        r = r + 1
+    }
+    out = out + fromCharCode(10) + rtrimLine(kRowSlice(getLine(text, r2), 0, c2 + 1))
+    emit out
+}
+
+// is cell (r,c) inside the inclusive linear selection (sr,sc)..(er,ec)?
+func kInSel(r, c, cols, sr, sc, er, ec) {
+    let r1 = sr  let c1 = sc  let r2 = er  let c2 = ec
+    if r1 > r2 || (r1 == r2 && c1 > c2) { r1 = er  c1 = ec  r2 = sr  c2 = sc }
+    let pos = r * cols + c
+    let lo = r1 * cols + c1
+    let hi = r2 * cols + c2
+    if pos >= lo && pos <= hi { emit 1 }
+    emit 0
+}
+
 // ── render: stem grid -> framebuffer, per-cell ANSI colour. Block cursor; bell. ──
-func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle) {
+func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC) {
     let back = bg
     if bell == 1 { back = 3355494 }                 // visual-bell flash
     fbClear(px, W, H, back)
@@ -154,11 +200,15 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
         while c < cols {
             let idx = r * cols + c
             let x = 4 + c * 8  let y = 2 + r * 16
+            let cellFg = kColorOf(toInt(charCode(substring(attr, idx, idx + 1))), fg)
             let cellBg = kColorOf(toInt(charCode(substring(battr, idx, idx + 1))), back)
+            if hasSel == 1 && kInSel(r, c, cols, selSR, selSC, selER, selEC) == 1 {
+                cellBg = 3756378            // 0x395A5A selection highlight
+            }
             if cellBg != back { fbFillRect(px, W, x, y, 8, 16, cellBg) }
             if c < llen {
                 let chcode = toInt(charCode(substring(line, c, c + 1)))
-                if chcode != 32 { fbDrawChar(px, W, H, font, x, y, chcode, kColorOf(toInt(charCode(substring(attr, idx, idx + 1))), fg)) }
+                if chcode != 32 { fbDrawChar(px, W, H, font, x, y, chcode, cellFg) }
             }
             c = c + 1
         }
@@ -263,6 +313,10 @@ just run {
     let quiet = 0           // consecutive empty reads (flush a buffered tail)
     let scrollOff = 0       // scrollback view offset (0 = live bottom)
     let sbCap = confGetInt(conf, "scrollback", 2000)
+    // mouse selection (live screen only): drag left button to select, release copies
+    let selecting = 0  let hasSel = 0
+    let selSR = 0  let selSC = 0  let selER = 0  let selEC = 0
+    let ptrR = 0   let ptrC = 0
     while running == 1 {
         // 1) drain wayland events (non-blocking)
         let eb = bufNew(8192)
@@ -285,6 +339,7 @@ just run {
                         cols = (W - 8) / 8  rows = (H - 4) / 16
                         ptySetSize(m, rows, cols)
                         st = gridNew(cols, rows)
+                        hasSel = 0  selecting = 0
                         fdWrite(m, fromCharCode(12), 1)   // resize wiped the grid -> Ctrl-L so the shell redraws into it
                         dirty = 1
                     }
@@ -300,6 +355,7 @@ just run {
                     let state = wlU32(eb, off + 20)
                     let kc = wlKeyToKc(wlU32(eb, off + 16))
                     if state == 1 {
+                        if hasSel == 1 { hasSel = 0  dirty = 1 }     // typing clears the selection
                         // Shift+PageUp/Down scrolls the scrollback (not sent to shell).
                         if shift == 1 && kc == 112 {
                             scrollOff = scrollOff + rows - 2
@@ -326,6 +382,33 @@ just run {
                                 if bytes != "" { fdWrite(m, bytes, len(bytes)) }
                             }
                         } }
+                    }
+                }
+                if obj == PTR && op == 2 {                   // wl_pointer.motion -> track cell
+                    let px = toInt(wlU32(eb, off + 12)) / 256   // wl_fixed -> px
+                    let py = toInt(wlU32(eb, off + 16)) / 256
+                    ptrC = (px - 4) / 8   if ptrC < 0 { ptrC = 0 }  if ptrC >= cols { ptrC = cols - 1 }
+                    ptrR = (py - 2) / 16  if ptrR < 0 { ptrR = 0 }  if ptrR >= rows { ptrR = rows - 1 }
+                    if selecting == 1 { selER = ptrR  selEC = ptrC  hasSel = 1  dirty = 1 }
+                }
+                if obj == PTR && op == 3 {                   // wl_pointer.button
+                    let btn = wlU32(eb, off + 16)            // BTN_LEFT = 272
+                    let bstate = wlU32(eb, off + 20)         // 1 = pressed
+                    if btn == 272 {
+                        if bstate == 1 {                     // press: anchor selection at cursor cell
+                            selecting = 1  hasSel = 0
+                            selSR = ptrR  selSC = ptrC  selER = ptrR  selEC = ptrC
+                            dirty = 1
+                        } else {                             // release: copy selection to clipboard
+                            selecting = 0
+                            if hasSel == 1 && scrollOff == 0 {
+                                let seltext = kSelText(st, cols, rows, selSR, selSC, selER, selEC)
+                                if len(seltext) > 0 {
+                                    writeFile("/tmp/.stem_sel", seltext)
+                                    exec("wl-copy < /tmp/.stem_sel 2>/dev/null")
+                                }
+                            }
+                        }
                     }
                 }
                 if obj == PTR && op == 4 {                   // wl_pointer.axis (scroll wheel)
@@ -385,7 +468,7 @@ just run {
             let fb = memfdCreate(sz)
             let px = mmapShared(fb, sz)
             if scrollOff > 0 { kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) }
-            else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle) }
+            else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC) }
             let didFlash = bell  bell = 0
             wlCreatePool(fd, SHM, pool, fb, sz)
             wlPoolCreateBuffer(fd, pool, buf, 0, W, H, stride, 1)
