@@ -86,18 +86,56 @@ func kShiftAlpha(c, shift) {
     emit c
 }
 
-// ── render: stem grid -> framebuffer. Block cursor; bell flashes the bg. ──────
+// xterm-256 colour index (0..255) -> packed 0xRRGGBB.
+func xterm256rgb(idx) {
+    if idx == 0  { emit 0 }          if idx == 1  { emit 8388608 }   // black, maroon
+    if idx == 2  { emit 32768 }      if idx == 3  { emit 8421376 }   // green, olive
+    if idx == 4  { emit 128 }        if idx == 5  { emit 8388736 }   // navy, purple
+    if idx == 6  { emit 32896 }      if idx == 7  { emit 12632256 }  // teal, silver
+    if idx == 8  { emit 8421504 }    if idx == 9  { emit 16711680 }  // grey, red
+    if idx == 10 { emit 65280 }      if idx == 11 { emit 16776960 }  // lime, yellow
+    if idx == 12 { emit 255 }        if idx == 13 { emit 16711935 }  // blue, fuchsia
+    if idx == 14 { emit 65535 }      if idx == 15 { emit 16777215 }  // aqua, white
+    if idx >= 232 { let v = 8 + (idx - 232) * 10  emit v * 65536 + v * 256 + v }  // greyscale ramp
+    let n = idx - 16                  // 6x6x6 colour cube
+    let r = n / 36  let g = (n - r * 36) / 6  let b = n - r * 36 - g * 6
+    let rv = 0  if r > 0 { rv = 55 + r * 40 }
+    let gv = 0  if g > 0 { gv = 55 + g * 40 }
+    let bv = 0  if b > 0 { bv = 55 + b * 40 }
+    emit rv * 65536 + gv * 256 + bv
+}
+// attr/battr cell byte -> rgb. <=1 = default (use `def`); >=2 = xterm256[byte-2].
+func kColorOf(byteVal, def) {
+    if byteVal <= 1 { emit def }
+    emit xterm256rgb(byteVal - 2)
+}
+
+// ── render: stem grid -> framebuffer, per-cell ANSI colour. Block cursor; bell. ──
 func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell) {
     let back = bg
-    if bell == 1 { back = 3355494 }            // 0x3333 66: brief bright flash for the visual bell
+    if bell == 1 { back = 3355494 }                 // visual-bell flash
     fbClear(px, W, H, back)
+    let total = cols * rows
+    let attr  = substring(st, 5 * total, 6 * total) // per-cell fg index byte
+    let battr = substring(st, 6 * total, 7 * total) // per-cell bg index byte
     let text = gridRender(st, cols, rows)
-    let n = toInt(lineCount(text))
-    let i = 0
-    while i < n && i < rows {
-        let line = getLine(text, i)
-        fbDrawText(px, W, H, font, 4, 2 + i * 16, line, fg)
-        i = i + 1
+    let r = 0
+    while r < rows {
+        let line = getLine(text, r)
+        let llen = len(line)
+        let c = 0
+        while c < cols {
+            let idx = r * cols + c
+            let x = 4 + c * 8  let y = 2 + r * 16
+            let cellBg = kColorOf(toInt(charCode(substring(battr, idx, idx + 1))), back)
+            if cellBg != back { fbFillRect(px, W, x, y, 8, 16, cellBg) }
+            if c < llen {
+                let chcode = toInt(charCode(substring(line, c, c + 1)))
+                if chcode != 32 { fbDrawChar(px, W, H, font, x, y, chcode, kColorOf(toInt(charCode(substring(attr, idx, idx + 1))), fg)) }
+            }
+            c = c + 1
+        }
+        r = r + 1
     }
     // block cursor (inverted cell) at gridCursor row,col
     let cur = gridCursor(st, cols, rows)
@@ -163,6 +201,9 @@ just run {
     let nextId = 11  let prevBuf = 0  let prevPool = 0  let prevMfd = 0
     let dirty = 1  let running = 1  let configured = 0
     let title = "stem"  let bell = 0
+    let pending = ""        // partial escape/UTF-8 carried between reads
+    let scrollback = ""     // lines that scrolled off the top (history)
+    let quiet = 0           // consecutive empty reads (flush a buffered tail)
     while running == 1 {
         // 1) drain wayland events (non-blocking)
         let eb = bufNew(8192)
@@ -208,14 +249,26 @@ just run {
                 off = off + s
             }
         }
-        // 2) drain pty output -> grid (+ dynamic window title from OSC 0/2)
+        // 2) drain pty output -> grid. Carry partial escape/UTF-8 across reads
+        // (gridSafeLen) or colour/box-drawing output split mid-sequence corrupts.
         let out = fdRead(m, 16384)
         if len(out) > 0 {
-            st = gridFeed(st, out, cols, rows)
-            dirty = 1
-            let nt = oscTitle(out, title)
+            let chunk = pending + out
+            let nt = oscTitle(chunk, title)
             if nt != title && nt != "" { title = nt  wlSetTitle(fd, TOP, title)  wlCommit(fd, SURF) }
-            if gridBell(st, cols, rows) == 1 { bell = 1 }
+            let cut = gridSafeLen(chunk)
+            if cut > 0 {
+                st = gridFeed(st, substring(chunk, 0, cut), cols, rows)
+                if gridBell(st, cols, rows) == 1 { bell = 1 }
+                let sc = gridScrolled(st, cols, rows)
+                if len(sc) > 0 { scrollback = scrollback + sc }
+                dirty = 1
+            }
+            pending = substring(chunk, cut, len(chunk))
+            quiet = 0
+        } else {
+            quiet = quiet + 1
+            if quiet >= 2 && len(pending) > 0 { st = gridFeed(st, pending, cols, rows)  pending = ""  dirty = 1 }
         }
 
         // 3) shell exited?
