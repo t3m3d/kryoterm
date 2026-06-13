@@ -221,7 +221,7 @@ func oscApply(s, pal) {
 // write back to the pty. Without these, fish/zsh/ncurses stall before the prompt:
 //   ESC[6n  DSR cursor position -> ESC[<row>;<col>R
 //   ESC[c / ESC[0c  DA1 -> ESC[?1;2c   ;   ESC[>c  DA2 -> ESC[>1;10;0c
-func termReplies(s, st, cols, rows) {
+func termReplies(s, meta, cols, rows) {
     let e = fromCharCode(27)
     let reply = ""
     let n = len(s)
@@ -238,7 +238,7 @@ func termReplies(s, st, cols, rows) {
                 j = j + 1
             }
             if fin == 110 && params == "6" {                       // DSR cursor position
-                let cur = gridCursor(st, cols, rows)
+                let cur = gridCursorM(meta)
                 let cm = indexOf(cur, ",")
                 let cr = toInt(substring(cur, 0, cm)) + 1
                 let cc = toInt(substring(cur, cm + 1, len(cur))) + 1
@@ -300,12 +300,12 @@ func kRowSlice(line, a, b) {
 
 // extract selected text from the live grid for range (sr,sc)..(er,ec), inclusive
 // of the end cell. Multi-row joins with '\n'; each row is rtrimmed.
-func kSelText(st, cols, rows, sr, sc, er, ec) {
+func kSelText(gb, cols, rows, sr, sc, er, ec) {
     let r1 = sr  let c1 = sc  let r2 = er  let c2 = ec
     if r1 > r2 || (r1 == r2 && c1 > c2) {     // normalize so (r1,c1) precedes (r2,c2)
         r1 = er  c1 = ec  r2 = sr  c2 = sc
     }
-    let text = gridPlain(st, cols, rows)
+    let text = gridPlainB(gb, cols, rows)
     if r1 == r2 { emit rtrimLine(kRowSlice(getLine(text, r1), c1, c2 + 1)) }
     let out = rtrimLine(kRowSlice(getLine(text, r1), c1, cols))
     let r = r1 + 1
@@ -371,14 +371,12 @@ func kCharAtCol(line, col) {
 }
 
 // ── render: stem grid -> framebuffer, per-cell ANSI colour. Block cursor; bell. ──
-func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC, pal) {
+func kDrawScreen(px, W, H, font, gb, ab, bb, meta, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC, pal) {
     let back = bg
     if bell == 1 { back = 3355494 }                 // visual-bell flash
     fbClear(px, W, H, back)
     let total = cols * rows
-    let attr  = substring(st, 5 * total, 6 * total) // per-cell fg index byte
-    let battr = substring(st, 6 * total, 7 * total) // per-cell bg index byte
-    let text = gridPlain(st, cols, rows)
+    let text = gridPlainB(gb, cols, rows)
     let r = 0
     while r < rows {
         let line = getLine(text, r)
@@ -388,8 +386,8 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
         while c < cols {
             let idx = r * cols + c
             let x = 4 + c * 8  let y = 2 + r * 16
-            let cellFg = kColorOf(toInt(charCode(substring(attr, idx, idx + 1))), fg, pal)
-            let cellBg = kColorOf(toInt(charCode(substring(battr, idx, idx + 1))), back, pal)
+            let cellFg = kColorOf(toInt(bufGetByte(ab, idx)), fg, pal)
+            let cellBg = kColorOf(toInt(bufGetByte(bb, idx)), back, pal)
             if hasSel == 1 && kInSel(r, c, cols, selSR, selSC, selER, selEC) == 1 {
                 cellBg = 3756378            // 0x395A5A selection highlight
             }
@@ -407,7 +405,7 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
         r = r + 1
     }
     // block cursor (inverted cell) at gridCursor row,col
-    let cur = gridCursor(st, cols, rows)
+    let cur = gridCursorM(meta)
     let comma = indexOf(cur, ",")
     let cr = toInt(substring(cur, 0, comma))
     let cc = toInt(substring(cur, comma + 1, len(cur)))
@@ -416,7 +414,7 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
         let cline = getLine(text, cr)
         let cglyph = kCharAtCol(cline, cc)              // col-th char (UTF-8 aware)
         let cstyle = curStyle                            // app DECSCUSR overrides the config default
-        let appShape = gridCshape(st, cols, rows)
+        let appShape = gridCshapeM(meta)
         if appShape == 1 { cstyle = 1 }                 // bar
         if appShape == 2 { cstyle = 0 }                 // block
         if appShape == 3 { cstyle = 2 }                 // underline
@@ -437,9 +435,9 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
 
 // scrollback view: history + live grid, offset up by scrollOff lines (monochrome —
 // scrolled-off rows are stored as plain text). A "▲" marks we're not at the bottom.
-func kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) {
+func kDrawScrollback(px, W, H, font, scrollback, gb, cols, rows, scrollOff, bg, fg) {
     fbClear(px, W, H, bg)
-    let view = gridScrollView(scrollback, gridPlain(st, cols, rows), rows, scrollOff)
+    let view = gridScrollView(scrollback, gridPlainB(gb, cols, rows), rows, scrollOff)
     let r = 0
     while r < rows {
         let line = gridStripSgr(getLine(view, r))   // history rows carry SGR; strip for the mono view
@@ -516,7 +514,10 @@ just run {
     while tries < 60 { if ptySetSize(m, rows, cols) == 0 { tries = 60 } else { sleepUs(0, 10000)  tries = tries + 1 } }
     ptySetNonblock(m)
     fdSetNonblock(fd)                  // wayland fd: poll, don't block
-    let st = gridNew(cols, rows)
+    // persistent plane buffers (mutated in place by gridFeedB — no per-feed alloc)
+    let gb = bufNew(5 * cols * rows)  let ab = bufNew(cols * rows)  let bb = bufNew(cols * rows)
+    gridBlank(gb, ab, bb, cols, rows)
+    let meta = gridInitMeta()
     let pal = palInit()                // live 256-colour palette (OSC 4 overrides)
 
     let shift = 0  let ctrl = 0
@@ -558,7 +559,8 @@ just run {
                         W = cw  H = chh
                         cols = (W - 8) / 8  rows = (H - 4) / 16
                         ptySetSize(m, rows, cols)
-                        st = gridNew(cols, rows)
+                        gb = bufNew(5 * cols * rows)  ab = bufNew(cols * rows)  bb = bufNew(cols * rows)
+                        gridBlank(gb, ab, bb, cols, rows)  meta = gridInitMeta()
                         hasSel = 0  selecting = 0
                         // a running shell redraws on SIGWINCH (ptySetSize above); only
                         // force Ctrl-L for resizes after the startup kick, else it
@@ -625,7 +627,7 @@ just run {
                         } else {                             // release: copy selection to clipboard
                             selecting = 0
                             if hasSel == 1 && scrollOff == 0 {
-                                let seltext = kSelText(st, cols, rows, selSR, selSC, selER, selEC)
+                                let seltext = kSelText(gb, cols, rows, selSR, selSC, selER, selEC)
                                 if len(seltext) > 0 {
                                     writeFile("/tmp/.stem_sel", seltext)
                                     exec("wl-copy < /tmp/.stem_sel 2>/dev/null")
@@ -688,12 +690,12 @@ just run {
                 if ocFg >= 0 { fg = ocFg }
                 if ocBg >= 0 { bg = ocBg }
                 if ocCur >= 0 { curColor = ocCur }
-                st = gridFeed(st, fed, cols, rows)
+                meta = gridFeedB(gb, ab, bb, meta, fed, cols, rows)
                 // answer DSR/DA queries (post-feed cursor) so the shell doesn't stall
-                let rep = termReplies(fed, st, cols, rows)
+                let rep = termReplies(fed, meta, cols, rows)
                 if len(rep) > 0 { fdWrite(m, rep, len(rep)) }
-                if gridBell(st, cols, rows) == 1 { if bellMode == "visual" { bell = 1 } }   // 'off' = ignore
-                let sc = gridScrolled(st, cols, rows)
+                if gridBellM(meta) == 1 { if bellMode == "visual" { bell = 1 } }   // 'off' = ignore
+                let sc = gridScrolledM(meta)
                 if len(sc) > 0 {
                     scrollback = scrollback + sc
                     let cap = sbCap * 200          // ~bytes budget for sbCap lines
@@ -705,7 +707,7 @@ just run {
             quiet = 0
         } else {
             quiet = quiet + 1
-            if quiet >= 2 && len(pending) > 0 { st = gridFeed(st, pending, cols, rows)  pending = ""  dirty = 1 }
+            if quiet >= 2 && len(pending) > 0 { meta = gridFeedB(gb, ab, bb, meta, pending, cols, rows)  pending = ""  dirty = 1 }
         }
 
         // 3) shell exited?
@@ -729,8 +731,8 @@ just run {
                 fbSz = sz
             }
             let px = fbPx
-            if scrollOff > 0 { kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) }
-            else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC, pal) }
+            if scrollOff > 0 { kDrawScrollback(px, W, H, font, scrollback, gb, cols, rows, scrollOff, bg, fg) }
+            else { kDrawScreen(px, W, H, font, gb, ab, bb, meta, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC, pal) }
             let didFlash = bell  bell = 0
             let buf = nextId  nextId = nextId + 1
             wlPoolCreateBuffer(fd, fbPool, buf, 0, W, H, stride, 1)

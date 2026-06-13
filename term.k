@@ -137,6 +137,11 @@ func _bufToS(b, n) {
     while i < n { sb = sbAppend(sb, fromCharCode(toInt(bufGetByte(b, i))))  i = i + 1 }
     emit sbToString(sb)
 }
+func _loadBuf(b, s, srcOff, n) {        // copy n bytes from s[srcOff:] into buffer b (in place)
+    let i = 0
+    while i < n { bufSetByte(b, i, toInt(charCode(substring(s, srcOff + i, srcOff + i + 1))))  i = i + 1 }
+    emit 0
+}
 func _putCellB(gb, cellIdx, chstr) {
     let w = len(chstr)
     let off = cellIdx * 5
@@ -325,15 +330,33 @@ func _decGfx(c) {
     emit c
 }
 
+func gridInitMeta() { emit "0,0,257,0,0,257,0,0,0,0,0,0,0,1,0,0,0" + fromCharCode(1) + fromCharCode(1) }
+func gridBlank(gb, ab, bb, cols, rows) {                   // fill persistent plane buffers blank
+    let total = cols * rows
+    _blankCellsB(gb, 0, total)  _fillB(ab, 0, total, 1)  _fillB(bb, 0, total, 1)
+    emit 0
+}
+// string-state wrapper (tests / CLI). stem uses gridFeedB directly with persistent
+// buffers so there is NO per-feed plane<->string conversion (that was the OOM leak).
 func gridFeed(state, s, cols, rows) {
+    let total = cols * rows
+    let g5 = 5 * total
+    let gb = _sToBuf(substring(state, 0, g5))
+    let ab = _sToBuf(substring(state, g5, g5 + total))
+    let bb = _sToBuf(substring(state, g5 + total, g5 + 2 * total))
+    let meta = substring(state, g5 + 2 * total + 1, len(state))   // tail<SOH>scrolled<SOH>savedGrids
+    let nm = gridFeedB(gb, ab, bb, meta, s, cols, rows)
+    emit _bufToS(gb, g5) + _bufToS(ab, total) + _bufToS(bb, total) + "|" + nm
+}
+
+// gridFeedB — the real engine. Mutates the plane buffers gb/ab/bb IN PLACE and
+// returns only the (small) meta string. No O(gridsize) work per feed.
+func gridFeedB(gb, ab, bb, meta, s, cols, rows) {
     let total = cols * rows
     let g5 = 5 * total
     let gtotal = g5
     let stride = cols * 5
-    let gb = _sToBuf(substring(state, 0, g5))               // mutable plane buffers (in-place; no per-char realloc)
-    let ab = _sToBuf(substring(state, g5, g5 + total))
-    let bb = _sToBuf(substring(state, g5 + total, g5 + 2 * total))
-    let tailFull = substring(state, g5 + 2 * total + 1, len(state))
+    let tailFull = meta
     let sohp = indexOf(tailFull, fromCharCode(1))
     let tail = substring(tailFull, 0, sohp)
     let afterSoh = substring(tailFull, sohp + 1, len(tailFull))   // scrolled <SOH> savedGrids
@@ -445,9 +468,9 @@ func gridFeed(state, s, cols, rows) {
                                         }
                                     } else {
                                         if altActive == 1 {
-                                            gb = _sToBuf(substring(savedGrids, 0, g5))             // restore main
-                                            ab = _sToBuf(substring(savedGrids, g5, g5 + total))
-                                            bb = _sToBuf(substring(savedGrids, g5 + total, g5 + 2 * total))
+                                            _loadBuf(gb, savedGrids, 0, g5)             // restore main (in place)
+                                            _loadBuf(ab, savedGrids, g5, total)
+                                            _loadBuf(bb, savedGrids, g5 + total, total)
                                             cr = savedAltCr  cc = savedAltCc  pw = 0
                                             savedGrids = ""
                                             altActive = 0
@@ -555,7 +578,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit _bufToS(gb, g5) + _bufToS(ab, total) + _bufToS(bb, total) + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + "," + pasteMode + "," + focusMode + "," + g0gfx + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
+    emit cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + "," + pasteMode + "," + focusMode + "," + g0gfx + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
@@ -590,22 +613,20 @@ func _renderRow(grid, attr, battr, base, cols) {
     emit sbToString(out)
 }
 
-// gridRender(state, cols, rows) — render the packed state to text (rows joined
-// by \n, trailing blanks trimmed, fg+bg colour re-emitted as ANSI).
-func gridRender(state, cols, rows) {
-    let total = cols * rows
-    let g5 = 5 * total
-    let grid = substring(state, 0, g5)
-    let attr = substring(state, g5, g5 + total)
-    let battr = substring(state, g5 + total, g5 + 2 * total)
+// gridRenderB(gb,ab,bb,...) reads the plane buffers directly (no string state).
+func gridRenderB(gb, ab, bb, cols, rows) {
     let out = sbNew()
     let r = 0
     while r < rows {
-        out = sbAppend(out, _renderRow(grid, attr, battr, r * cols, cols))
+        out = sbAppend(out, _renderRowB(gb, ab, bb, r * cols, cols))
         if r < rows - 1 { out = sbAppend(out, fromCharCode(10)) }
         r = r + 1
     }
     emit sbToString(out)
+}
+func gridRender(state, cols, rows) {                       // string-state wrapper (tests/CLI)
+    let total = cols * rows  let g5 = 5 * total
+    emit gridRenderB(_sToBuf(substring(state, 0, g5)), _sToBuf(substring(state, g5, g5 + total)), _sToBuf(substring(state, g5 + total, g5 + 2 * total)), cols, rows)
 }
 
 // _plainRow / gridPlain — like _renderRow / gridRender but GLYPHS ONLY, no SGR.
@@ -631,18 +652,38 @@ func _plainRow(grid, base, cols) {
     }
     emit sbToString(out)
 }
-func gridPlain(state, cols, rows) {
-    let total = cols * rows
-    let g5 = 5 * total
-    let grid = substring(state, 0, g5)
+func _plainRowB(gb, base, cols) {
+    let e = cols
+    let trimming = 1
+    while e > 0 && trimming == 1 {
+        let off = (base + e - 1) * 5
+        if toInt(bufGetByte(gb, off)) == 1 && toInt(bufGetByte(gb, off + 1)) == 32 { e = e - 1 }
+        else { trimming = 0 }
+    }
+    let out = sbNew()
+    let col = 0
+    while col < e {
+        let off = (base + col) * 5
+        let w = toInt(bufGetByte(gb, off))
+        let k = 0
+        while k < w { out = sbAppend(out, fromCharCode(toInt(bufGetByte(gb, off + 1 + k))))  k = k + 1 }
+        col = col + 1
+    }
+    emit sbToString(out)
+}
+func gridPlainB(gb, cols, rows) {
     let out = sbNew()
     let r = 0
     while r < rows {
-        out = sbAppend(out, _plainRow(grid, r * cols, cols))
+        out = sbAppend(out, _plainRowB(gb, r * cols, cols))
         if r < rows - 1 { out = sbAppend(out, fromCharCode(10)) }
         r = r + 1
     }
     emit sbToString(out)
+}
+func gridPlain(state, cols, rows) {                        // string-state wrapper (tests/CLI)
+    let total = cols * rows  let g5 = 5 * total
+    emit gridPlainB(_sToBuf(substring(state, 0, g5)), cols, rows)
 }
 
 // gridStripSgr(s) — drop all ESC[…m SGR from a (multi-line) string; public wrapper
@@ -811,6 +852,26 @@ func gridScrolled(state, cols, rows) {
     let afterSoh = substring(tailFull, sohp + 1, len(tailFull))   // scrolled <SOH> savedGrids
     let soh2 = indexOf(afterSoh, fromCharCode(1))
     if soh2 >= 0 { emit substring(afterSoh, 0, soh2) }            // just the scrolled part
+    emit afterSoh
+}
+
+// ── meta-direct readers (stem holds the small meta string; no planes) ─────────
+func gridCursorM(meta) {
+    let tail = substring(meta, 0, indexOf(meta, fromCharCode(1)))
+    if _cf(tail, 13) == 0 { emit "9999,0" }                      // cursor hidden (DECSET 25)
+    emit _cf(tail, 0) + "," + _cf(tail, 1)
+}
+func gridCshapeM(meta) {
+    emit _cf(substring(meta, 0, indexOf(meta, fromCharCode(1))), 14)
+}
+func gridBellM(meta) {
+    emit _cf(substring(meta, 0, indexOf(meta, fromCharCode(1))), 7)
+}
+func gridScrolledM(meta) {
+    let sohp = indexOf(meta, fromCharCode(1))
+    let afterSoh = substring(meta, sohp + 1, len(meta))
+    let soh2 = indexOf(afterSoh, fromCharCode(1))
+    if soh2 >= 0 { emit substring(afterSoh, 0, soh2) }
     emit afterSoh
 }
 
