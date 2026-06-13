@@ -747,7 +747,10 @@ just run {
             dirty = 0
             if didFlash == 1 { dirty = 1 }   // bell flashed this frame -> redraw normal next frame
         }
-        sleepUs(0, 8000)               // ~8ms poll
+        // adaptive poll: fdRead allocates its buffer every call (no GC), so spinning
+        // at 8ms while idle is a slow leak. Back off to ~40ms after the shell goes
+        // quiet; snap back to 8ms the moment data flows (keeps typing responsive).
+        if quiet > 3 { sleepUs(0, 40000) } else { sleepUs(0, 8000) }
     }
     // clean shutdown: closing the pty master hangs up the shell (SIGHUP); drop
     // the wayland connection so the surface is destroyed (no orphan window).
