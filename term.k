@@ -142,8 +142,10 @@ func _rgb256(r, g, b) {
 func _applySgr(pen, params) {
     let n = len(params)
     if n == 0 { emit 257 }
-    let fg = pen / 256
-    let bg = pen - fg * 256
+    let rev = pen / 65536            // reverse-video flag carried in the pen's high bits
+    let base = pen - rev * 65536
+    let fg = base / 256
+    let bg = base - fg * 256
     let i = 0
     let cur = 0
     let any = 0
@@ -172,9 +174,11 @@ func _applySgr(pen, params) {
                 else { if stage == 1 { if cur == 5 { stage = 2 } else { if cur == 2 { stage = 5 } else { stage = 0 } } }
                 else { if stage == 3 { if cur == 5 { stage = 4 } else { if cur == 2 { stage = 8 } else { stage = 0 } } }
                 else {
-                    if cur == 0 { fg = 1  bg = 1  bold = 0 }
+                    if cur == 0 { fg = 1  bg = 1  bold = 0  rev = 0 }
                     if cur == 1 { bold = 1 }                         // bold/bright
                     if cur == 22 { bold = 0 }                        // normal intensity
+                    if cur == 7 { rev = 1 }                          // reverse video on
+                    if cur == 27 { rev = 0 }                         // reverse video off
                     if cur == 38 { stage = 1 }
                     if cur == 48 { stage = 3 }
                     if cur == 39 { fg = 1 }
@@ -194,7 +198,7 @@ func _applySgr(pen, params) {
         i = i + 1
     }
     if bold == 1 && fg >= 2 && fg <= 9 { fg = fg + 8 }   // standard fg 0-7 -> bright 8-15
-    emit fg * 256 + bg
+    emit rev * 65536 + fg * 256 + bg
 }
 
 // _sgrPair(fg, bg) — ANSI to set (fg,bg); 1 = default, else 256-colour index+2.
@@ -458,12 +462,21 @@ func gridFeed(state, s, cols, rows) {
                                     }
                                 }
                                 let idx = cr * cols + cc
-                                let pfg = pen / 256
+                                let prev = pen / 65536           // reverse flag
+                                let pbase = pen - prev * 65536
+                                let pfg = pbase / 256
+                                let pbg = pbase - pfg * 256
+                                if prev == 1 {                   // reverse: swap fg/bg; default sides -> black/white
+                                    let nfg = pbg  let nbg = pfg
+                                    if pbg == 1 { nfg = 2 }       // default bg shown as fg -> palette 0 (black)
+                                    if pfg == 1 { nbg = 17 }      // default fg shown as bg -> palette 15 (white)
+                                    pfg = nfg  pbg = nbg
+                                }
                                 let glyph = substring(s, i, i + clen)
                                 if g0gfx == 1 && clen == 1 && c >= 96 && c <= 126 { glyph = fromCharCode(_decGfx(c)) }
                                 grid = _putCell(grid, idx, glyph)
                                 attr = _put1(attr, idx, fromCharCode(pfg))
-                                battr = _put1(battr, idx, fromCharCode(pen - pfg * 256))
+                                battr = _put1(battr, idx, fromCharCode(pbg))
                                 if cc >= cols - 1 { pw = 1 }                     // at last column -> defer wrap
                                 else { cc = cc + 1 }
                                 i = i + clen
