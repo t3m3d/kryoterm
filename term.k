@@ -222,6 +222,29 @@ func gridNew(cols, rows) {
 
 // gridFeed(state, s, cols, rows) — process byte string s against the packed
 // state (cursor/erase/colour/scroll), return the new packed state.
+// DEC Special Graphics (ESC ( 0) -> single-byte ASCII approximation. The 8x16
+// framebuffer font has no box glyphs and the renderer is one byte per column, so
+// we fold line-drawing to |,-,+ etc. so TUI borders stay readable + aligned.
+func _decGfx(c) {
+    if c == 120 { emit 124 }    // x │ -> |
+    if c == 113 { emit 45 }     // q ─ -> -
+    if c == 106 { emit 43 }     // j ┘ -> +
+    if c == 107 { emit 43 }     // k ┐ -> +
+    if c == 108 { emit 43 }     // l ┌ -> +
+    if c == 109 { emit 43 }     // m └ -> +
+    if c == 110 { emit 43 }     // n ┼ -> +
+    if c == 116 { emit 43 }     // t ├ -> +
+    if c == 117 { emit 43 }     // u ┤ -> +
+    if c == 118 { emit 43 }     // v ┴ -> +
+    if c == 119 { emit 43 }     // w ┬ -> +
+    if c == 96  { emit 43 }     // ` ◆ -> +
+    if c == 97  { emit 35 }     // a ▒ -> #
+    if c == 111 { emit 126 }    // o ⎺ -> ~
+    if c == 115 { emit 95 }     // s ⎽ -> _
+    if c == 126 { emit 46 }     // ~ · -> .
+    emit c
+}
+
 func gridFeed(state, s, cols, rows) {
     let total = cols * rows
     let g5 = 5 * total
@@ -253,6 +276,7 @@ func gridFeed(state, s, cols, rows) {
     let cshape = _cf(tail, 14)           // app cursor shape (DECSCUSR): 0 config, 1 bar, 2 block, 3 underline
     let pasteMode = _cf(tail, 15)        // bracketed paste enabled (DECSET 2004)
     let focusMode = _cf(tail, 16)        // focus reporting enabled (DECSET 1004)
+    let g0gfx = _cf(tail, 17)            // G0 = DEC special graphics (ESC ( 0) for line-drawing
     let scrolled = ""                    // rows scrolled off THIS feed (reset each call)
     let bell = 0                         // bare BEL (0x07) seen THIS feed (reset each call)
     let n = len(s)
@@ -371,8 +395,12 @@ func gridFeed(state, s, cols, rows) {
                     } else {
                         if k == 40 || k == 41 || k == 42 || k == 43 {
                             // charset designation: ESC ( / ) / * / + <final> (3-byte).
-                            // We consume it (G0..G3 selection); ASCII is the only set
-                            // we render, so DEC line-drawing chars pass through as-is.
+                            // G0 (ESC ( <f>) drives line-drawing: '0' = DEC special
+                            // graphics, 'B'/'A'/... = ASCII. G1..G3 just consumed.
+                            if k == 40 && i + 2 < n {
+                                let fb = charCode(substring(s, i + 2, i + 3))
+                                if fb == 48 { g0gfx = 1 } else { g0gfx = 0 }
+                            }
                             i = i + 3
                         } else {
                             if k == 55 { scr = cr  scc = cc  spen = pen }    // ESC 7 save cursor
@@ -419,7 +447,9 @@ func gridFeed(state, s, cols, rows) {
                                 }
                                 let idx = cr * cols + cc
                                 let pfg = pen / 256
-                                grid = _putCell(grid, idx, substring(s, i, i + clen))
+                                let glyph = substring(s, i, i + clen)
+                                if g0gfx == 1 && clen == 1 && c >= 96 && c <= 126 { glyph = fromCharCode(_decGfx(c)) }
+                                grid = _putCell(grid, idx, glyph)
                                 attr = _put1(attr, idx, fromCharCode(pfg))
                                 battr = _put1(battr, idx, fromCharCode(pen - pfg * 256))
                                 if cc >= cols - 1 { pw = 1 }                     // at last column -> defer wrap
@@ -433,7 +463,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + "," + pasteMode + "," + focusMode + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
+    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + "," + pasteMode + "," + focusMode + "," + g0gfx + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
