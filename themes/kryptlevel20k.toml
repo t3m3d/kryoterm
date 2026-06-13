@@ -1,0 +1,74 @@
+# kryptlevel20k — powerline prompt for stem. Green + white only (krypton look).
+# Uses only glyphs stem's font ships: powerline E0B0-E0B7 + branch/folder/terminal icons.
+"$schema" = 'https://starship.rs/config-schema.json'
+
+format = """
+[](fg:k_g1)\
+[  ](bg:k_g1 fg:k_white)\
+[$username](bg:k_g1 fg:k_white)\
+[](fg:k_g1 bg:k_g2)\
+[  $directory ](bg:k_g2 fg:k_dark)\
+[](fg:k_g2 bg:k_g3)\
+[ $git_branch$git_status ](bg:k_g3 fg:k_dark)\
+[](fg:k_g3)\
+$line_break\
+$character"""
+
+right_format = """
+[](fg:k_g2)\
+[ $cmd_duration ](bg:k_g2 fg:k_white)\
+[](fg:k_g1 bg:k_g2)\
+[   $time ](bg:k_g1 fg:k_white)\
+[](fg:k_g1)"""
+
+palette = 'krypton'
+add_newline = true
+
+[palettes.krypton]
+k_dark  = '#0d1510'   # near-black green text (on light segments)
+k_white = '#eafff0'   # soft white text (on dark segments)
+# greens chosen so stem's truecolor->256 fold keeps them GREEN (G dominant), not grey
+k_g1    = '#1e5a2b'   # dark green segment
+k_g2    = '#3a9d4a'   # mid green segment
+k_g3    = '#98ff98'   # bright krypton green segment
+k_red   = '#d98a8a'
+
+[username]
+show_always = true
+style_user = "bg:k_g1 fg:k_white"
+style_root = "bg:k_g1 fg:k_white"
+format = '[ $user ]($style)'
+
+[directory]
+style = "fg:k_dark bg:k_g2"
+format = "[$path]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[git_branch]
+symbol = ""
+style = "bg:k_g3"
+format = '[ $symbol $branch ](fg:k_dark bg:k_g3)'
+
+[git_status]
+style = "bg:k_g3"
+format = '[($all_status$ahead_behind )](fg:k_dark bg:k_g3)'
+
+[cmd_duration]
+min_time = 0
+format = '[ $duration]($style)'
+style = "fg:k_white bg:k_g2"
+
+[time]
+disabled = false
+time_format = "%R"
+style = "bg:k_g1"
+format = '[$time](fg:k_white bg:k_g1)'
+
+[line_break]
+disabled = false
+
+[character]
+success_symbol = '[❯](bold fg:k_g3)'
+error_symbol = '[❯](bold fg:k_red)'
+vimcmd_symbol = '[❮](bold fg:k_g3)'
