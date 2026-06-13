@@ -533,9 +533,10 @@ just run {
     let selecting = 0  let hasSel = 0
     let selSR = 0  let selSC = 0  let selER = 0  let selEC = 0
     let ptrR = 0   let ptrC = 0
+    let eb = bufNew(8192)              // reused every loop (was leaking 8KB/iteration)
+    let fbMem = 0  let fbPx = 0  let fbPool = 0  let fbSz = 0   // shared framebuffer, reused across frames
     while running == 1 {
         // 1) drain wayland events (non-blocking)
-        let eb = bufNew(8192)
         let en = wlRecvInto(fd, eb, 8192)
         let off = 0
         while off + 8 <= en {
@@ -710,23 +711,34 @@ just run {
         // 3) shell exited?
         if waitChild(childPid) != 0 { running = 0 }
 
-        // 4) present
+        // 4) present. Reuse ONE shared memfd/mmap/pool across frames (mmapShared
+        // has no munmap, so a per-frame mapping leaked ~MBs/frame -> OOM crash).
+        // Reallocate only when the window grows beyond the current allocation.
         if dirty == 1 && configured == 1 && running == 1 {
-            if prevBuf != 0 { wlBufferDestroy(fd, prevBuf)  wlPoolDestroy(fd, prevPool)  sockClose(prevMfd) }
-            let pool = nextId  let buf = nextId + 1  nextId = nextId + 2
             let stride = W * 4
             let sz = stride * H
-            let fb = memfdCreate(sz)
-            let px = mmapShared(fb, sz)
+            if sz > fbSz {
+                if fbPool != 0 {
+                    if prevBuf != 0 { wlBufferDestroy(fd, prevBuf)  prevBuf = 0 }
+                    wlPoolDestroy(fd, fbPool)  sockClose(fbMem)   // old mapping leaks (rare: only on grow)
+                }
+                fbMem = memfdCreate(sz)
+                fbPx = mmapShared(fbMem, sz)
+                fbPool = nextId  nextId = nextId + 1
+                wlCreatePool(fd, SHM, fbPool, fbMem, sz)
+                fbSz = sz
+            }
+            let px = fbPx
             if scrollOff > 0 { kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) }
             else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC, pal) }
             let didFlash = bell  bell = 0
-            wlCreatePool(fd, SHM, pool, fb, sz)
-            wlPoolCreateBuffer(fd, pool, buf, 0, W, H, stride, 1)
+            let buf = nextId  nextId = nextId + 1
+            wlPoolCreateBuffer(fd, fbPool, buf, 0, W, H, stride, 1)
             wlSurfaceAttach(fd, SURF, buf, 0, 0)
             wlDamage(fd, SURF, 0, 0, W, H)
             wlCommit(fd, SURF)
-            prevBuf = buf  prevPool = pool  prevMfd = fb
+            if prevBuf != 0 { wlBufferDestroy(fd, prevBuf) }   // free previous frame's lightweight wl_buffer
+            prevBuf = buf
             dirty = 0
             if didFlash == 1 { dirty = 1 }   // bell flashed this frame -> redraw normal next frame
         }

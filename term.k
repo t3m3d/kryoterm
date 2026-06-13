@@ -122,6 +122,78 @@ func _scrollUp(g, stride, gtotal, fillRow) {
     emit substring(g, stride, gtotal) + fillRow
 }
 
+// ── buffer-backed plane ops (gridFeed mutates buffers in place; the old string
+// splice rebuilt the whole ~50KB grid PER CHARACTER -> OOM under output). ───────
+func _sToBuf(s) {
+    let n = len(s)
+    let b = bufNew(n)
+    let i = 0
+    while i < n { bufSetByte(b, i, toInt(charCode(substring(s, i, i + 1))))  i = i + 1 }
+    emit b
+}
+func _bufToS(b, n) {
+    let sb = sbNew()
+    let i = 0
+    while i < n { sb = sbAppend(sb, fromCharCode(toInt(bufGetByte(b, i))))  i = i + 1 }
+    emit sbToString(sb)
+}
+func _putCellB(gb, cellIdx, chstr) {
+    let w = len(chstr)
+    let off = cellIdx * 5
+    bufSetByte(gb, off, w)
+    let k = 0
+    while k < w { bufSetByte(gb, off + 1 + k, toInt(charCode(substring(chstr, k, k + 1))))  k = k + 1 }
+    while k < 4 { bufSetByte(gb, off + 1 + k, 1)  k = k + 1 }
+    emit 0
+}
+func _blankCellsB(gb, startCell, count) {       // blank `count` grid cells (width 1, space)
+    let c = 0
+    while c < count {
+        let off = (startCell + c) * 5
+        bufSetByte(gb, off, 1)  bufSetByte(gb, off + 1, 32)
+        bufSetByte(gb, off + 2, 1)  bufSetByte(gb, off + 3, 1)  bufSetByte(gb, off + 4, 1)
+        c = c + 1
+    }
+    emit 0
+}
+func _fillB(b, start, count, v) {               // fill `count` attr/battr bytes with v
+    let c = 0
+    while c < count { bufSetByte(b, start + c, v)  c = c + 1 }
+    emit 0
+}
+func _scrollBytesB(b, rowBytes, totalBytes) {   // shift everything up one row (caller fills last row)
+    let i = rowBytes
+    while i < totalBytes { bufSetByte(b, i - rowBytes, toInt(bufGetByte(b, i)))  i = i + 1 }
+    emit 0
+}
+func _renderRowB(gb, ab, bb, base, cols) {       // one cell-row -> text, from buffers (for scrolled)
+    let e = cols
+    let trimming = 1
+    while e > 0 && trimming == 1 {
+        let off = (base + e - 1) * 5
+        if toInt(bufGetByte(gb, off)) == 1 && toInt(bufGetByte(gb, off + 1)) == 32 { e = e - 1 }
+        else { trimming = 0 }
+    }
+    let out = sbNew()
+    let lastFg = 1  let lastBg = 1
+    let col = 0
+    while col < e {
+        let cellFg = toInt(bufGetByte(ab, base + col))
+        let cellBg = toInt(bufGetByte(bb, base + col))
+        if cellFg != lastFg || cellBg != lastBg {
+            out = sbAppend(out, _sgrPair(cellFg, cellBg))
+            lastFg = cellFg  lastBg = cellBg
+        }
+        let off = (base + col) * 5
+        let w = toInt(bufGetByte(gb, off))
+        let k = 0
+        while k < w { out = sbAppend(out, fromCharCode(toInt(bufGetByte(gb, off + 1 + k))))  k = k + 1 }
+        col = col + 1
+    }
+    if lastFg != 1 || lastBg != 1 { out = sbAppend(out, fromCharCode(27) + "[0m") }
+    emit sbToString(out)
+}
+
 // _applySgr(pen, params) — fold an SGR list (e.g. "1;31;44") into the colour pen
 // (fg*256+bg, sentinel 1 each): fg 30-37/39/90-97, bg 40-47/49/100-107.
 // _lvl(v) — an 8-bit channel -> nearest xterm-256 cube level (0-5).
@@ -258,9 +330,9 @@ func gridFeed(state, s, cols, rows) {
     let g5 = 5 * total
     let gtotal = g5
     let stride = cols * 5
-    let grid = substring(state, 0, g5)
-    let attr = substring(state, g5, g5 + total)
-    let battr = substring(state, g5 + total, g5 + 2 * total)
+    let gb = _sToBuf(substring(state, 0, g5))               // mutable plane buffers (in-place; no per-char realloc)
+    let ab = _sToBuf(substring(state, g5, g5 + total))
+    let bb = _sToBuf(substring(state, g5 + total, g5 + 2 * total))
     let tailFull = substring(state, g5 + 2 * total + 1, len(state))
     let sohp = indexOf(tailFull, fromCharCode(1))
     let tail = substring(tailFull, 0, sohp)
@@ -336,9 +408,7 @@ func gridFeed(state, s, cols, rows) {
                             if pj == 1 { jb = cr * cols + cc + 1 }    // start → cursor
                             // pj >= 2: whole screen
                             let jcnt = jb - ja
-                            grid = substring(grid, 0, ja * 5) + _blankRow(jcnt) + substring(grid, ja * 5 + jcnt * 5, gtotal)
-                            attr = substring(attr, 0, ja) + _fill1(jcnt) + substring(attr, ja + jcnt, total)
-                            battr = substring(battr, 0, ja) + _fill1(jcnt) + substring(battr, ja + jcnt, total)
+                            _blankCellsB(gb, ja, jcnt)  _fillB(ab, ja, jcnt, 1)  _fillB(bb, ja, jcnt, 1)
                             if pj >= 2 { cr = 0  cc = 0 }            // clear-all homes (matches kryofetch)
                         }
                         if fin == 75 {                   // 'K' erase in line (honour param)
@@ -349,11 +419,8 @@ func gridFeed(state, s, cols, rows) {
                             if pk == 1 { b = cc + 1 }                // start → cursor
                             // pk == 2 (or other): whole line (a=0, b=cols)
                             let cnt = b - a
-                            let o5 = (cr * cols + a) * 5
-                            grid = substring(grid, 0, o5) + _blankRow(cnt) + substring(grid, o5 + cnt * 5, gtotal)
                             let o1 = cr * cols + a
-                            attr = substring(attr, 0, o1) + _fill1(cnt) + substring(attr, o1 + cnt, total)
-                            battr = substring(battr, 0, o1) + _fill1(cnt) + substring(battr, o1 + cnt, total)
+                            _blankCellsB(gb, o1, cnt)  _fillB(ab, o1, cnt, 1)  _fillB(bb, o1, cnt, 1)
                         }
                         if fin == 104 || fin == 108 {    // 'h' DECSET / 'l' DECRST (private '?' modes)
                             if len(params) > 0 && charCode(substring(params, 0, 1)) == 63 {
@@ -370,17 +437,17 @@ func gridFeed(state, s, cols, rows) {
                                 if mode == 1049 || mode == 1047 || mode == 47 {                    // alt screen
                                     if on == 1 {
                                         if altActive == 0 {
-                                            savedGrids = grid + attr + battr     // save the main planes
+                                            savedGrids = _bufToS(gb, g5) + _bufToS(ab, total) + _bufToS(bb, total)  // save main
                                             savedAltCr = cr  savedAltCc = cc
-                                            grid = _blankRow(total)  attr = _fill1(total)  battr = _fill1(total)
+                                            _blankCellsB(gb, 0, total)  _fillB(ab, 0, total, 1)  _fillB(bb, 0, total, 1)
                                             cr = 0  cc = 0  pw = 0
                                             altActive = 1
                                         }
                                     } else {
                                         if altActive == 1 {
-                                            grid = substring(savedGrids, 0, g5)             // restore main
-                                            attr = substring(savedGrids, g5, g5 + total)
-                                            battr = substring(savedGrids, g5 + total, g5 + 2 * total)
+                                            gb = _sToBuf(substring(savedGrids, 0, g5))             // restore main
+                                            ab = _sToBuf(substring(savedGrids, g5, g5 + total))
+                                            bb = _sToBuf(substring(savedGrids, g5 + total, g5 + 2 * total))
                                             cr = savedAltCr  cc = savedAltCc  pw = 0
                                             savedGrids = ""
                                             altActive = 0
@@ -418,7 +485,7 @@ func gridFeed(state, s, cols, rows) {
                             if k == 55 { scr = cr  scc = cc  spen = pen }    // ESC 7 save cursor
                             if k == 56 { cr = scr  cc = scc  pen = spen }    // ESC 8 restore cursor
                             if k == 99 {                                     // ESC c = RIS full reset
-                                grid = _blankRow(total)  attr = _fill1(total)  battr = _fill1(total)
+                                _blankCellsB(gb, 0, total)  _fillB(ab, 0, total, 1)  _fillB(bb, 0, total, 1)
                                 cr = 0  cc = 0  pen = 257  pw = 0  g0gfx = 0  altActive = 0
                             }
                             i = i + 2                        // ESC x (2-byte)
@@ -430,10 +497,10 @@ func gridFeed(state, s, cols, rows) {
             if c == 10 {                                                         // LF → newline
                 cr = cr + 1  cc = 0  pw = 0
                 if cr >= rows {
-                    if altActive == 0 { scrolled = scrolled + _renderRow(grid, attr, battr, 0, cols) + fromCharCode(10) }
-                    grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
-                    attr = _scrollUp(attr, cols, total, _fill1(cols))
-                    battr = _scrollUp(battr, cols, total, _fill1(cols))
+                    if altActive == 0 { scrolled = scrolled + _renderRowB(gb, ab, bb, 0, cols) + fromCharCode(10) }
+                    _scrollBytesB(gb, stride, gtotal)  _blankCellsB(gb, (rows - 1) * cols, cols)
+                    _scrollBytesB(ab, cols, total)  _fillB(ab, (rows - 1) * cols, cols, 1)
+                    _scrollBytesB(bb, cols, total)  _fillB(bb, (rows - 1) * cols, cols, 1)
                     cr = rows - 1
                 }
                 i = i + 1
@@ -454,10 +521,10 @@ func gridFeed(state, s, cols, rows) {
                                 if pw == 1 {                                     // deferred wrap from last col
                                     cc = 0  cr = cr + 1  pw = 0
                                     if cr >= rows {
-                                        if altActive == 0 { scrolled = scrolled + _renderRow(grid, attr, battr, 0, cols) + fromCharCode(10) }
-                                        grid = _scrollUp(grid, stride, gtotal, _blankRow(cols))
-                                        attr = _scrollUp(attr, cols, total, _fill1(cols))
-                                        battr = _scrollUp(battr, cols, total, _fill1(cols))
+                                        if altActive == 0 { scrolled = scrolled + _renderRowB(gb, ab, bb, 0, cols) + fromCharCode(10) }
+                                        _scrollBytesB(gb, stride, gtotal)  _blankCellsB(gb, (rows - 1) * cols, cols)
+                                        _scrollBytesB(ab, cols, total)  _fillB(ab, (rows - 1) * cols, cols, 1)
+                                        _scrollBytesB(bb, cols, total)  _fillB(bb, (rows - 1) * cols, cols, 1)
                                         cr = rows - 1
                                     }
                                 }
@@ -474,9 +541,9 @@ func gridFeed(state, s, cols, rows) {
                                 }
                                 let glyph = substring(s, i, i + clen)
                                 if g0gfx == 1 && clen == 1 && c >= 96 && c <= 126 { glyph = fromCharCode(_decGfx(c)) }
-                                grid = _putCell(grid, idx, glyph)
-                                attr = _put1(attr, idx, fromCharCode(pfg))
-                                battr = _put1(battr, idx, fromCharCode(pbg))
+                                _putCellB(gb, idx, glyph)
+                                bufSetByte(ab, idx, pfg)
+                                bufSetByte(bb, idx, pbg)
                                 if cc >= cols - 1 { pw = 1 }                     // at last column -> defer wrap
                                 else { cc = cc + 1 }
                                 i = i + clen
@@ -488,7 +555,7 @@ func gridFeed(state, s, cols, rows) {
         }
     }
 
-    emit grid + attr + battr + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + "," + pasteMode + "," + focusMode + "," + g0gfx + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
+    emit _bufToS(gb, g5) + _bufToS(ab, total) + _bufToS(bb, total) + "|" + cr + "," + cc + "," + pen + "," + scr + "," + scc + "," + spen + "," + pw + "," + bell + "," + mlevel + "," + msgr + "," + altActive + "," + savedAltCr + "," + savedAltCc + "," + cvis + "," + cshape + "," + pasteMode + "," + focusMode + "," + g0gfx + fromCharCode(1) + scrolled + fromCharCode(1) + savedGrids
 }
 
 // _renderRow(grid, attr, battr, base, cols) — one cell-row (base = row*cols)
