@@ -1,36 +1,39 @@
 # kryptlevel20k — powerline prompt for stem. Green + white only (krypton look).
-# Uses only glyphs stem's font ships: powerline E0B0-E0B7 + branch/folder/terminal icons.
+# Glyphs from stem's bundled font: powerline E0B0-E0B7, branch/folder, rust/python,
+# and a custom krypton atom (U+E900). Two-line, p10k-style.
 "$schema" = 'https://starship.rs/config-schema.json'
 
 format = """
-[](fg:k_g1)\
+[](fg:k_g1)\
 [  ](bg:k_g1 fg:k_white)\
 [$username](bg:k_g1 fg:k_white)\
-[](fg:k_g1 bg:k_g2)\
+[](fg:k_g1 bg:k_g2)\
 [  $directory ](bg:k_g2 fg:k_dark)\
-[](fg:k_g2 bg:k_g3)\
+[](fg:k_g2 bg:k_g3)\
 [ $git_branch$git_status ](bg:k_g3 fg:k_dark)\
-[](fg:k_g3)\
+[](fg:k_g3 bg:k_g4)\
+[ $rust$python${custom.krypton}](bg:k_g4 fg:k_white)\
+[](fg:k_g4)\
 $line_break\
 $character"""
 
 right_format = """
-[](fg:k_g2)\
+[](fg:k_g2)\
 [ $cmd_duration ](bg:k_g2 fg:k_white)\
-[](fg:k_g1 bg:k_g2)\
+[](fg:k_g1 bg:k_g2)\
 [   $time ](bg:k_g1 fg:k_white)\
-[](fg:k_g1)"""
+[](fg:k_g1)"""
 
 palette = 'krypton'
 add_newline = true
 
 [palettes.krypton]
-k_dark  = '#0d1510'   # near-black green text (on light segments)
-k_white = '#eafff0'   # soft white text (on dark segments)
-# greens chosen so stem's truecolor->256 fold keeps them GREEN (G dominant), not grey
-k_g1    = '#1e5a2b'   # dark green segment
-k_g2    = '#3a9d4a'   # mid green segment
-k_g3    = '#98ff98'   # bright krypton green segment
+k_dark  = '#0d1510'
+k_white = '#eafff0'
+k_g1    = '#1e5a2b'
+k_g2    = '#3a9d4a'
+k_g3    = '#98ff98'
+k_g4    = '#2f7d3f'
 k_red   = '#d98a8a'
 
 [username]
@@ -46,13 +49,31 @@ truncation_length = 3
 truncation_symbol = "…/"
 
 [git_branch]
-symbol = ""
+symbol = ""
 style = "bg:k_g3"
 format = '[ $symbol $branch ](fg:k_dark bg:k_g3)'
 
 [git_status]
 style = "bg:k_g3"
 format = '[($all_status$ahead_behind )](fg:k_dark bg:k_g3)'
+
+[rust]
+symbol = ""
+style = "bg:k_g4 fg:k_white"
+format = '[ $symbol($version) ]($style)'
+
+[python]
+symbol = ""
+style = "bg:k_g4 fg:k_white"
+format = '[ $symbol($version) ]($style)'
+
+[custom.krypton]
+detect_extensions = ["k", "ks"]
+symbol = ""
+command = "kcc --version 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1"
+format = '[ $symbol $output ]($style)'
+style = "bg:k_g4 fg:k_white"
+shell = ["bash", "--noprofile", "--norc"]
 
 [cmd_duration]
 min_time = 0
