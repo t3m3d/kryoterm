@@ -12,6 +12,7 @@ module stem
 
 import "./pty.k"     // PTY engine wrapper (ptyOpen/Read/Write/Drain/Close)
 import "./term.k"    // grid driver (renderGrid — ANSI/cursor/erase -> text)
+import "./config.k"  // ~/.config/stem/stem.conf loader (shell, cols, rows, scrollback)
 
 // Open a real pty and spawn `shellPath` on it. Returns the master fd.
 func stem_spawn(shellPath) {
@@ -41,8 +42,12 @@ func stem_render(raw, cols, rows) {
 // Phase-3 loop: run `cmd` in a shell on a pty, render the session in the grid.
 // (run.ks passes a parsed argv command here.)
 func stem_loop(cmd) {
-    let raw = stem_run("/bin/zsh", cmd)
-    stem_render(raw, 80, 24)
+    let conf = confLoad()
+    let shell = confGet(conf, "shell", "/bin/bash")
+    let cols = confGetInt(conf, "cols", 80)
+    let rows = confGetInt(conf, "rows", 24)
+    let raw = stem_run(shell, cmd)
+    stem_render(raw, cols, rows)
     emit 0
 }
 
@@ -89,7 +94,7 @@ func stem_interactive(shellPath, cols, rows) {
     let title = ""                        // window title (OSC 0/2 from the shell)
     let scrollback = ""                   // history lines that scrolled off the top
     let scrollOff = 0                     // view offset (lines up from the bottom; 0=live)
-    let sbCap = 2000                      // scrollback line cap (shim sets via "L,n")
+    let sbCap = confGetInt(confLoad(), "scrollback", 2000)  // scrollback line cap (conf; shim may override via "L,n")
     let findQuery = ""                    // active find-in-scrollback query
     let findIdx = 0                       // which match (0 = most recent), wraps
     let findResult = "-1,-1,-1,0,0"           // matchRow,matchCol,matchLen for the shim to highlight
@@ -250,9 +255,12 @@ func stem_interactive(shellPath, cols, rows) {
 just run {
     let n = argCount()
     if n >= 1 && arg(0) == "-i" {
+        let conf = confLoad()
         let prog = environ("STEM_EXEC")        // host app can launch any program (e.g. kcode)
-        if prog == "" { prog = "/bin/zsh" }
-        stem_interactive(prog, 104, 30)
+        if prog == "" { prog = confGet(conf, "shell", "/bin/bash") }
+        let cols = confGetInt(conf, "cols", 104)
+        let rows = confGetInt(conf, "rows", 30)
+        stem_interactive(prog, cols, rows)
     } else {
         print("stem — pure-Krypton terminal (live PTY engine)")
         print("--------------------------------------------------")
