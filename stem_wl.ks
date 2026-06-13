@@ -412,9 +412,16 @@ just run {
                                 if len(seltext) > 0 {
                                     writeFile("/tmp/.stem_sel", seltext)
                                     exec("wl-copy < /tmp/.stem_sel 2>/dev/null")
+                                    exec("wl-copy --primary < /tmp/.stem_sel 2>/dev/null")   // X-style PRIMARY
                                 }
                             }
                         }
+                    }
+                    // middle-click pastes the PRIMARY selection (the Linux idiom)
+                    if btn == 274 && bstate == 1 {
+                        let clip = exec("wl-paste --primary -n 2>/dev/null")
+                        if len(clip) > 0 { fdWrite(m, clip, len(clip)) }
+                        if scrollOff != 0 { scrollOff = 0  dirty = 1 }
                     }
                 }
                 if obj == PTR && op == 4 {                   // wl_pointer.axis (scroll wheel)
