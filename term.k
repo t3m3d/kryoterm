@@ -369,9 +369,16 @@ func gridFeed(state, s, cols, rows) {
                         }
                         if done == 0 { i = n }
                     } else {
-                        if k == 55 { scr = cr  scc = cc  spen = pen }    // ESC 7 save cursor
-                        if k == 56 { cr = scr  cc = scc  pen = spen }    // ESC 8 restore cursor
-                        i = i + 2                        // ESC x (2-byte)
+                        if k == 40 || k == 41 || k == 42 || k == 43 {
+                            // charset designation: ESC ( / ) / * / + <final> (3-byte).
+                            // We consume it (G0..G3 selection); ASCII is the only set
+                            // we render, so DEC line-drawing chars pass through as-is.
+                            i = i + 3
+                        } else {
+                            if k == 55 { scr = cr  scc = cc  spen = pen }    // ESC 7 save cursor
+                            if k == 56 { cr = scr  cc = scc  pen = spen }    // ESC 8 restore cursor
+                            i = i + 2                        // ESC x (2-byte)
+                        }
                     }
                 }
             }
@@ -518,6 +525,9 @@ func gridSafeLen(s) {
                     else { j = j + 1 }
                 }
                 if done == 0 { escCut = lastEsc }
+            }
+            if k == 40 || k == 41 || k == 42 || k == 43 {   // charset ESC (/)/*/+ <final>: 3 bytes
+                if lastEsc + 3 > n { escCut = lastEsc }
             }
         }
     }

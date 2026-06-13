@@ -263,7 +263,12 @@ just run {
     if curStyleS == "bar" { curStyle = 1 }
     if curStyleS == "underline" { curStyle = 2 }
 
-    let W = 800  let H = 480
+    // initial size from config grid (a tiling compositor may override on map).
+    let cfgCols = confGetInt(conf, "cols", 100)
+    let cfgRows = confGetInt(conf, "rows", 30)
+    if cfgCols < 20 { cfgCols = 20 }   if cfgCols > 400 { cfgCols = 400 }
+    if cfgRows < 5  { cfgRows = 5 }    if cfgRows > 200 { cfgRows = 200 }
+    let W = cfgCols * 8 + 8  let H = cfgRows * 16 + 4
     let cols = (W - 8) / 8
     let rows = (H - 4) / 16
 
