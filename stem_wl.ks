@@ -46,6 +46,13 @@ func kKeyBytes(kc, shift, ctrl) {
     if kc == 116 { emit esc + "[B" }    // Down
     if kc == 114 { emit esc + "[C" }    // Right
     if kc == 113 { emit esc + "[D" }    // Left
+    // navigation / editing keys
+    if kc == 110 { emit esc + "[H" }    // Home
+    if kc == 115 { emit esc + "[F" }    // End
+    if kc == 112 { emit esc + "[5~" }   // Page Up
+    if kc == 117 { emit esc + "[6~" }   // Page Down
+    if kc == 118 { emit esc + "[2~" }   // Insert
+    if kc == 119 { emit esc + "[3~" }   // Delete
     // printable via keyChar layout (shared shape with cortex)
     let ch = kCharOf(kc, shift)
     if ch != "" {
@@ -150,6 +157,20 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell) {
     }
 }
 
+// scrollback view: history + live grid, offset up by scrollOff lines (monochrome —
+// scrolled-off rows are stored as plain text). A "▲" marks we're not at the bottom.
+func kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) {
+    fbClear(px, W, H, bg)
+    let view = gridScrollView(scrollback, gridRender(st, cols, rows), rows, scrollOff)
+    let r = 0
+    while r < rows {
+        let line = getLine(view, r)
+        fbDrawText(px, W, H, font, 4, 2 + r * 16, line, fg)
+        r = r + 1
+    }
+    fbDrawText(px, W, H, font, W - 80, 2, "^" + scrollOff + " (shift+pgdn=back)", 16776960)   // scroll indicator
+}
+
 just run {
     // ── config ──
     let conf = confLoad()
@@ -204,6 +225,8 @@ just run {
     let pending = ""        // partial escape/UTF-8 carried between reads
     let scrollback = ""     // lines that scrolled off the top (history)
     let quiet = 0           // consecutive empty reads (flush a buffered tail)
+    let scrollOff = 0       // scrollback view offset (0 = live bottom)
+    let sbCap = confGetInt(conf, "scrollback", 2000)
     while running == 1 {
         // 1) drain wayland events (non-blocking)
         let eb = bufNew(8192)
@@ -232,18 +255,31 @@ just run {
                 }
                 if obj == TOP && op == 1 { running = 0 }    // xdg_toplevel.close -> exit cleanly (keybind close works)
                 if obj == 1 && op == 0 { running = 0 }      // wl_display.error
-                if obj == KB && op == 1 { shift = 0  ctrl = 0 }   // modifiers (simplified)
-                if obj == KB && op == 3 {
+                if obj == KB && op == 4 {                    // wl_keyboard.modifiers (authoritative)
+                    let mods = wlU32(eb, off + 12)           // mods_depressed bitmask
+                    shift = 0  if bitAnd(mods, 1) != 0 { shift = 1 }   // bit0 = shift
+                    ctrl = 0   if bitAnd(mods, 4) != 0 { ctrl = 1 }    // bit2 = ctrl
+                }
+                if obj == KB && op == 3 {                    // wl_keyboard.key
                     let state = wlU32(eb, off + 20)
                     let kc = wlKeyToKc(wlU32(eb, off + 16))
                     if state == 1 {
-                        if kc == 50 || kc == 62 { shift = 1 }
-                        if kc == 37 || kc == 105 { ctrl = 1 }
-                        let bytes = kKeyBytes(kc, shift, ctrl)
-                        if bytes != "" { fdWrite(m, bytes, len(bytes)) }
-                    } else {
-                        if kc == 50 || kc == 62 { shift = 0 }
-                        if kc == 37 || kc == 105 { ctrl = 0 }
+                        // Shift+PageUp/Down scrolls the scrollback (not sent to shell).
+                        if shift == 1 && kc == 112 {
+                            scrollOff = scrollOff + rows - 2
+                            let maxOff = toInt(lineCount(scrollback))
+                            if scrollOff > maxOff { scrollOff = maxOff }
+                            dirty = 1
+                        }
+                        else { if shift == 1 && kc == 117 {
+                            scrollOff = scrollOff - (rows - 2)
+                            if scrollOff < 0 { scrollOff = 0 }
+                            dirty = 1
+                        } else {
+                            if scrollOff != 0 { scrollOff = 0  dirty = 1 }   // any other key jumps back to live
+                            let bytes = kKeyBytes(kc, shift, ctrl)
+                            if bytes != "" { fdWrite(m, bytes, len(bytes)) }
+                        } }
                     }
                 }
                 off = off + s
@@ -261,7 +297,11 @@ just run {
                 st = gridFeed(st, substring(chunk, 0, cut), cols, rows)
                 if gridBell(st, cols, rows) == 1 { bell = 1 }
                 let sc = gridScrolled(st, cols, rows)
-                if len(sc) > 0 { scrollback = scrollback + sc }
+                if len(sc) > 0 {
+                    scrollback = scrollback + sc
+                    let cap = sbCap * 200          // ~bytes budget for sbCap lines
+                    if len(scrollback) > cap { scrollback = substring(scrollback, len(scrollback) - cap, len(scrollback)) }
+                }
                 dirty = 1
             }
             pending = substring(chunk, cut, len(chunk))
@@ -282,7 +322,8 @@ just run {
             let sz = stride * H
             let fb = memfdCreate(sz)
             let px = mmapShared(fb, sz)
-            kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell)
+            if scrollOff > 0 { kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) }
+            else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell) }
             let didFlash = bell  bell = 0
             wlCreatePool(fd, SHM, pool, fb, sz)
             wlPoolCreateBuffer(fd, pool, buf, 0, W, H, stride, 1)
