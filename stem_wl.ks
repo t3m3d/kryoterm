@@ -13,6 +13,7 @@ import "k:wayland"
 import "./term.k"      // gridNew / gridFeed / gridRender
 import "./pty.k"       // ptyMaster / ptySlaveName / ptyForkExec / fd*
 import "./config.k"    // confLoad / confGet / confGetInt
+import "./stemfont.k"  // stemFontLoad / stemDrawChar (extended glyphs)
 
 // Find a wl_registry global's `name` by interface (registry obj=2, global op=0).
 // (Local helper — k:wayland exposes the wire getters but not this scan.)
@@ -402,7 +403,7 @@ func kDrawScreen(px, W, H, font, gb, ab, bb, meta, cols, rows, bg, fg, bell, cur
             if cellBg != back { fbFillRect(px, W, x, y, 8, 16, cellBg) }
             let w = toInt(bufGetByte(gb, off))
             let chcode = kCellCp(gb, off, w)
-            if chcode != 32 { fbDrawChar(px, W, H, font, x, y, chcode, cellFg) }
+            if chcode != 32 { stemDrawChar(px, W, H, font, x, y, chcode, cellFg) }
             c = c + 1
         }
         r = r + 1
@@ -423,14 +424,14 @@ func kDrawScreen(px, W, H, font, gb, ab, bb, meta, cols, rows, bg, fg, bell, cur
         if appShape == 3 { cstyle = 2 }                 // underline
         if cstyle == 1 {                                // bar: 2px at cell left, glyph normal
             fbFillRect(px, W, cx, cy, 2, 16, curColor)
-            if cglyph != 32 { fbDrawChar(px, W, H, font, cx, cy, cglyph, fg) }
+            if cglyph != 32 { stemDrawChar(px, W, H, font, cx, cy, cglyph, fg) }
         } else {
             if cstyle == 2 {                            // underline: 2px at cell bottom, glyph normal
                 fbFillRect(px, W, cx, cy + 14, 8, 2, curColor)
-                if cglyph != 32 { fbDrawChar(px, W, H, font, cx, cy, cglyph, fg) }
+                if cglyph != 32 { stemDrawChar(px, W, H, font, cx, cy, cglyph, fg) }
             } else {                                    // block: fill cell, glyph inverted
                 fbFillRect(px, W, cx, cy, 8, 16, curColor)
-                if cglyph != 32 { fbDrawChar(px, W, H, font, cx, cy, cglyph, back) }
+                if cglyph != 32 { stemDrawChar(px, W, H, font, cx, cy, cglyph, back) }
             }
         }
     }
@@ -512,7 +513,7 @@ just run {
     wlSetAppId(fd, TOP, "stem")
     wlCommit(fd, SURF)
 
-    let font = wlFontLoad()
+    let font = stemFontLoad()
     let tries = 0
     while tries < 60 { if ptySetSize(m, rows, cols) == 0 { tries = 60 } else { sleepUs(0, 10000)  tries = tries + 1 } }
     ptySetNonblock(m)
