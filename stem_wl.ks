@@ -114,10 +114,152 @@ func xterm256rgb(idx) {
     let bv = 0  if b > 0 { bv = 55 + b * 40 }
     emit rv * 65536 + gv * 256 + bv
 }
-// attr/battr cell byte -> rgb. <=1 = default (use `def`); >=2 = xterm256[byte-2].
-func kColorOf(byteVal, def) {
+// ── mutable 256-colour palette (OSC 4 can override entries) ──────────────────
+// 3 bytes (R,G,B) per index. Seeded from xterm256rgb; OSC 4 rewrites entries.
+func palInit() {
+    let pal = bufNew(768)
+    let i = 0
+    while i < 256 {
+        let rgb = xterm256rgb(i)
+        let r = rgb / 65536  let g = (rgb - r * 65536) / 256  let b = rgb - r * 65536 - g * 256
+        bufSetByte(pal, i * 3, r)  bufSetByte(pal, i * 3 + 1, g)  bufSetByte(pal, i * 3 + 2, b)
+        i = i + 1
+    }
+    emit pal
+}
+func palRGB(pal, idx) {
+    let o = idx * 3
+    emit toInt(bufGetByte(pal, o)) * 65536 + toInt(bufGetByte(pal, o + 1)) * 256 + toInt(bufGetByte(pal, o + 2))
+}
+func palSet(pal, idx, rgb) {
+    if idx < 0 || idx > 255 { emit 0 }
+    let r = rgb / 65536  let g = (rgb - r * 65536) / 256  let b = rgb - r * 65536 - g * 256
+    bufSetByte(pal, idx * 3, r)  bufSetByte(pal, idx * 3 + 1, g)  bufSetByte(pal, idx * 3 + 2, b)
+    emit 0
+}
+
+func _isHexCh(c) { if (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70) { emit 1 }  emit 0 }
+
+// parse an OSC colour spec ("#RRGGBB", "#RRRRGGGGBBBB", "rgb:rr/gg/bb") -> rgb, -1 if not.
+func parseOscColor(spec) {
+    let h = indexOf(spec, "#")
+    if h >= 0 {
+        let raw = substring(spec, h + 1, len(spec))
+        let e = 0
+        while e < len(raw) && _isHexCh(toInt(charCode(substring(raw, e, e + 1)))) == 1 { e = e + 1 }
+        let hex = substring(raw, 0, e)
+        if len(hex) >= 12 { emit hexColor(substring(hex, 0, 2) + substring(hex, 4, 6) + substring(hex, 8, 10), 0) }
+        if len(hex) >= 6 { emit hexColor(substring(hex, 0, 6), 0) }
+        emit 0 - 1
+    }
+    let r = indexOf(spec, "rgb:")
+    if r >= 0 {
+        let body = substring(spec, r + 4, len(spec))
+        let p1 = indexOf(body, "/")
+        if p1 < 0 { emit 0 - 1 }
+        let cr = substring(body, 0, p1)
+        let rest = substring(body, p1 + 1, len(body))
+        let p2 = indexOf(rest, "/")
+        if p2 < 0 { emit 0 - 1 }
+        let cg = substring(rest, 0, p2)
+        let cb = substring(rest, p2 + 1, len(rest))
+        emit hexColor(substring(cr, 0, 2) + substring(cg, 0, 2) + substring(cb, 0, 2), 0)
+    }
+    emit 0 - 1
+}
+
+// scan a chunk for OSC 4 / 10 / 11 / 12; apply OSC 4 to `pal` (in place); return
+// "fg,bg,cursor" rgb ints from the last 10/11/12 (-1 = unchanged).
+func oscApply(s, pal) {
+    let fgC = 0 - 1  let bgC = 0 - 1  let curC = 0 - 1
+    let n = len(s)
+    let i = 0
+    while i + 1 < n {
+        if toInt(charCode(substring(s, i, i + 1))) == 27 && toInt(charCode(substring(s, i + 1, i + 2))) == 93 {
+            let bstart = i + 2
+            let j = bstart
+            let term = 0
+            while j < n && term == 0 {
+                let cj = toInt(charCode(substring(s, j, j + 1)))
+                if cj == 7 { term = 1 }
+                else { if cj == 27 && j + 1 < n && toInt(charCode(substring(s, j + 1, j + 2))) == 92 { term = 1 }
+                else { j = j + 1 } }
+            }
+            let body = substring(s, bstart, j)
+            if j < n && toInt(charCode(substring(s, j, j + 1))) == 7 { i = j + 1 } else { i = j + 2 }
+            let semi = indexOf(body, ";")
+            if semi > 0 {
+                let ps = substring(body, 0, semi)
+                let rest = substring(body, semi + 1, len(body))
+                if ps == "10" { let c = parseOscColor(rest)  if c >= 0 { fgC = c } }
+                if ps == "11" { let c = parseOscColor(rest)  if c >= 0 { bgC = c } }
+                if ps == "12" { let c = parseOscColor(rest)  if c >= 0 { curC = c } }
+                if ps == "4" {
+                    let r2 = rest  let go = 1
+                    while go == 1 {
+                        let s1 = indexOf(r2, ";")
+                        if s1 < 0 { go = 0 }
+                        else {
+                            let idx = toInt(substring(r2, 0, s1))
+                            let after = substring(r2, s1 + 1, len(r2))
+                            let s2 = indexOf(after, ";")
+                            let colStr = after
+                            if s2 >= 0 { colStr = substring(after, 0, s2)  r2 = substring(after, s2 + 1, len(after)) }
+                            else { go = 0 }
+                            let col = parseOscColor(colStr)
+                            if col >= 0 { palSet(pal, idx, col) }
+                        }
+                    }
+                }
+            }
+        } else { i = i + 1 }
+    }
+    emit fgC + "," + bgC + "," + curC
+}
+
+// Scan a chunk for terminal QUERIES the program waits on, and return the bytes to
+// write back to the pty. Without these, fish/zsh/ncurses stall before the prompt:
+//   ESC[6n  DSR cursor position -> ESC[<row>;<col>R
+//   ESC[c / ESC[0c  DA1 -> ESC[?1;2c   ;   ESC[>c  DA2 -> ESC[>1;10;0c
+func termReplies(s, st, cols, rows) {
+    let e = fromCharCode(27)
+    let reply = ""
+    let n = len(s)
+    let i = 0
+    while i + 1 < n {
+        if toInt(charCode(substring(s, i, i + 1))) == 27 && toInt(charCode(substring(s, i + 1, i + 2))) == 91 {
+            let j = i + 2
+            let params = ""
+            let fin = 0
+            while j < n && fin == 0 {
+                let cj = toInt(charCode(substring(s, j, j + 1)))
+                if cj >= 64 && cj <= 126 { fin = cj }
+                else { params = params + substring(s, j, j + 1) }
+                j = j + 1
+            }
+            if fin == 110 && params == "6" {                       // DSR cursor position
+                let cur = gridCursor(st, cols, rows)
+                let cm = indexOf(cur, ",")
+                let cr = toInt(substring(cur, 0, cm)) + 1
+                let cc = toInt(substring(cur, cm + 1, len(cur))) + 1
+                if cr < 1 || cr > rows { cr = 1 }
+                if cc < 1 || cc > cols { cc = 1 }
+                reply = reply + e + "[" + cr + ";" + cc + "R"
+            }
+            if fin == 99 {                                         // DA
+                if params == "" || params == "0" { reply = reply + e + "[?1;2c" }       // DA1
+                else { if substring(params, 0, 1) == ">" { reply = reply + e + "[>1;10;0c" } }  // DA2
+            }
+            i = j
+        } else { i = i + 1 }
+    }
+    emit reply
+}
+
+// attr/battr cell byte -> rgb. <=1 = default (use `def`); >=2 = palette[byte-2].
+func kColorOf(byteVal, def, pal) {
     if byteVal <= 1 { emit def }
-    emit xterm256rgb(byteVal - 2)
+    emit palRGB(pal, byteVal - 2)
 }
 
 // parse a hex colour string ("CCFFCC" / "#CCFFCC" / "0xCCFFCC") -> 0xRRGGBB; def if blank.
@@ -229,7 +371,7 @@ func kCharAtCol(line, col) {
 }
 
 // ── render: stem grid -> framebuffer, per-cell ANSI colour. Block cursor; bell. ──
-func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC) {
+func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC, pal) {
     let back = bg
     if bell == 1 { back = 3355494 }                 // visual-bell flash
     fbClear(px, W, H, back)
@@ -246,8 +388,8 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyl
         while c < cols {
             let idx = r * cols + c
             let x = 4 + c * 8  let y = 2 + r * 16
-            let cellFg = kColorOf(toInt(charCode(substring(attr, idx, idx + 1))), fg)
-            let cellBg = kColorOf(toInt(charCode(substring(battr, idx, idx + 1))), back)
+            let cellFg = kColorOf(toInt(charCode(substring(attr, idx, idx + 1))), fg, pal)
+            let cellBg = kColorOf(toInt(charCode(substring(battr, idx, idx + 1))), back, pal)
             if hasSel == 1 && kInSel(r, c, cols, selSR, selSC, selER, selEC) == 1 {
                 cellBg = 3756378            // 0x395A5A selection highlight
             }
@@ -375,11 +517,12 @@ just run {
     ptySetNonblock(m)
     fdSetNonblock(fd)                  // wayland fd: poll, don't block
     let st = gridNew(cols, rows)
+    let pal = palInit()                // live 256-colour palette (OSC 4 overrides)
 
     let shift = 0  let ctrl = 0
     let nextId = 12  let prevBuf = 0  let prevPool = 0  let prevMfd = 0
     let dirty = 1  let running = 1  let configured = 0
-    let kicked = 0  let kickIn = 0     // one-shot startup Ctrl-L once the shell is ready
+    let kicked = 0  let kickIn = 0  let kickArmed = 0   // debounced startup Ctrl-L once the shell settles
     let title = "stem"  let bell = 0
     let pending = ""        // partial escape/UTF-8 carried between reads
     let scrollback = ""     // lines that scrolled off the top (history)
@@ -402,10 +545,10 @@ just run {
                 if obj == WM && op == 0 { wlPong(fd, WM, wlU32(eb, off + 8)) }
                 if obj == XS && op == 0 {
                     wlAckConfigure(fd, XS, wlU32(eb, off + 8))
-                    // Arm a single delayed Ctrl-L (~200ms) so the shell — which may
-                    // still be starting through the wrapper — reprints its prompt
-                    // once into the final-sized grid. One kick = no stacked prompts.
-                    if configured == 0 { kickIn = 25 }
+                    // Arm a DEBOUNCED Ctrl-L: it fires ~240ms after the shell's
+                    // startup output stops (each chunk resets kickIn below), so a
+                    // slow shell reprints its prompt once into the final grid.
+                    if configured == 0 { kickArmed = 1  kickIn = 30 }
                     configured = 1  dirty = 1
                 }
                 if obj == TOP && op == 0 {
@@ -516,22 +659,38 @@ just run {
                 off = off + s
             }
         }
-        // one-shot startup kick: once the countdown elapses, nudge the shell to
-        // reprint its prompt into the configured grid (it may have started late).
-        if kickIn > 0 {
+        // debounced startup kick: fire once the countdown elapses (reset by each
+        // startup output chunk below) so the shell reprints its prompt exactly once.
+        if kickArmed == 1 && kickIn > 0 {
             kickIn = kickIn - 1
-            if kickIn == 0 { fdWrite(m, fromCharCode(12), 1)  kicked = 1  dirty = 1 }
+            if kickIn == 0 { fdWrite(m, fromCharCode(12), 1)  kicked = 1  kickArmed = 0  dirty = 1 }
         }
         // 2) drain pty output -> grid. Carry partial escape/UTF-8 across reads
         // (gridSafeLen) or colour/box-drawing output split mid-sequence corrupts.
         let out = fdRead(m, 16384)
         if len(out) > 0 {
+            if kickArmed == 1 { kickIn = 30 }   // shell still emitting startup -> hold the kick
             let chunk = pending + out
             let nt = oscTitle(chunk, title)
             if nt != title && nt != "" { title = nt  wlSetTitle(fd, TOP, title)  wlCommit(fd, SURF) }
             let cut = gridSafeLen(chunk)
             if cut > 0 {
-                st = gridFeed(st, substring(chunk, 0, cut), cols, rows)
+                let fed = substring(chunk, 0, cut)
+                // OSC 4/10/11/12 theming: update palette + default fg/bg/cursor.
+                let oc = oscApply(fed, pal)
+                let oci = indexOf(oc, ",")
+                let ocFg = toInt(substring(oc, 0, oci))
+                let ocR = substring(oc, oci + 1, len(oc))
+                let ocj = indexOf(ocR, ",")
+                let ocBg = toInt(substring(ocR, 0, ocj))
+                let ocCur = toInt(substring(ocR, ocj + 1, len(ocR)))
+                if ocFg >= 0 { fg = ocFg }
+                if ocBg >= 0 { bg = ocBg }
+                if ocCur >= 0 { curColor = ocCur }
+                st = gridFeed(st, fed, cols, rows)
+                // answer DSR/DA queries (post-feed cursor) so the shell doesn't stall
+                let rep = termReplies(fed, st, cols, rows)
+                if len(rep) > 0 { fdWrite(m, rep, len(rep)) }
                 if gridBell(st, cols, rows) == 1 { if bellMode == "visual" { bell = 1 } }   // 'off' = ignore
                 let sc = gridScrolled(st, cols, rows)
                 if len(sc) > 0 {
@@ -560,7 +719,7 @@ just run {
             let fb = memfdCreate(sz)
             let px = mmapShared(fb, sz)
             if scrollOff > 0 { kDrawScrollback(px, W, H, font, scrollback, st, cols, rows, scrollOff, bg, fg) }
-            else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC) }
+            else { kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell, curColor, curStyle, hasSel, selSR, selSC, selER, selEC, pal) }
             let didFlash = bell  bell = 0
             wlCreatePool(fd, SHM, pool, fb, sz)
             wlPoolCreateBuffer(fd, pool, buf, 0, W, H, stride, 1)
