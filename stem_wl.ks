@@ -95,14 +95,17 @@ func kShiftAlpha(c, shift) {
 
 // xterm-256 colour index (0..255) -> packed 0xRRGGBB.
 func xterm256rgb(idx) {
-    if idx == 0  { emit 0 }          if idx == 1  { emit 8388608 }   // black, maroon
-    if idx == 2  { emit 32768 }      if idx == 3  { emit 8421376 }   // green, olive
-    if idx == 4  { emit 128 }        if idx == 5  { emit 8388736 }   // navy, purple
-    if idx == 6  { emit 32896 }      if idx == 7  { emit 12632256 }  // teal, silver
-    if idx == 8  { emit 8421504 }    if idx == 9  { emit 16711680 }  // grey, red
-    if idx == 10 { emit 65280 }      if idx == 11 { emit 16776960 }  // lime, yellow
-    if idx == 12 { emit 255 }        if idx == 13 { emit 16711935 }  // blue, fuchsia
-    if idx == 14 { emit 65535 }      if idx == 15 { emit 16777215 }  // aqua, white
+    // base-16: One Dark palette (readable on a dark bg — the VGA defaults made
+    // ANSI blue 0x000080 etc. unreadable). black raised to a dark grey so black
+    // text isn't invisible.
+    if idx == 0  { emit 3883080 }    if idx == 1  { emit 14707829 }  // black(grey), red
+    if idx == 2  { emit 10011513 }   if idx == 3  { emit 15057019 }  // green, yellow
+    if idx == 4  { emit 6402031 }    if idx == 5  { emit 13007069 }  // blue, magenta
+    if idx == 6  { emit 5682882 }    if idx == 7  { emit 11252415 }  // cyan, white
+    if idx == 8  { emit 6054768 }    if idx == 9  { emit 14707829 }  // br.grey, br.red
+    if idx == 10 { emit 10011513 }   if idx == 11 { emit 15057019 }  // br.green, br.yellow
+    if idx == 12 { emit 6402031 }    if idx == 13 { emit 13007069 }  // br.blue, br.magenta
+    if idx == 14 { emit 5682882 }    if idx == 15 { emit 16777215 }  // br.cyan, br.white
     if idx >= 232 { let v = 8 + (idx - 232) * 10  emit v * 65536 + v * 256 + v }  // greyscale ramp
     let n = idx - 16                  // 6x6x6 colour cube
     let r = n / 36  let g = (n - r * 36) / 6  let b = n - r * 36 - g * 6
@@ -308,6 +311,7 @@ just run {
     // ── config ──
     let conf = confLoad()
     let shell = confGet(conf, "shell", "/bin/bash")
+    let term = confGet(conf, "term", "xterm-256color")          // $TERM for the child
     let bg = hexColor(confGet(conf, "bg", ""), 1054753)         // 0x101821 dark
     let fg = hexColor(confGet(conf, "fg", ""), 13434828)        // 0xCCFFCC soft green
     let curColor = hexColor(confGet(conf, "cursor_color", ""), fg)
@@ -333,7 +337,16 @@ just run {
     // zombie windows that ignore close. Forking before connect avoids that.
     let m = ptyMaster("/dev/ptmx")
     let slave = ptySlaveName(m)
-    let childPid = ptyForkExec(slave, shell)
+    // ptyForkExec inherits stem's environment, and a Wayland session (Hyprland)
+    // usually has no TERM — so fish/ncurses/clear break ("TERM not set"). There is
+    // no setenv builtin, so launch the shell through a tiny wrapper that exports
+    // TERM first. As a bonus `shell` may now carry args (e.g. "/usr/bin/fish -l").
+    let nl = fromCharCode(10)
+    let wrapPath = "/tmp/.stem-shell-" + m
+    let wrap = "#!/bin/sh" + nl + "export TERM=" + term + nl + "export COLORTERM=truecolor" + nl + "exec " + shell + nl
+    writeFile(wrapPath, wrap)
+    exec("chmod +x " + wrapPath + " 2>/dev/null")
+    let childPid = ptyForkExec(slave, wrapPath)
 
     // ── wayland surface (child already forked: it has no Wayland fd) ──
     let fd = wlConnect()
@@ -366,6 +379,7 @@ just run {
     let shift = 0  let ctrl = 0
     let nextId = 12  let prevBuf = 0  let prevPool = 0  let prevMfd = 0
     let dirty = 1  let running = 1  let configured = 0
+    let kicked = 0  let kickIn = 0     // one-shot startup Ctrl-L once the shell is ready
     let title = "stem"  let bell = 0
     let pending = ""        // partial escape/UTF-8 carried between reads
     let scrollback = ""     // lines that scrolled off the top (history)
@@ -388,7 +402,10 @@ just run {
                 if obj == WM && op == 0 { wlPong(fd, WM, wlU32(eb, off + 8)) }
                 if obj == XS && op == 0 {
                     wlAckConfigure(fd, XS, wlU32(eb, off + 8))
-                    if configured == 0 { fdWrite(m, fromCharCode(12), 1) }   // first map: Ctrl-L -> shell reprints its prompt
+                    // Arm a single delayed Ctrl-L (~200ms) so the shell — which may
+                    // still be starting through the wrapper — reprints its prompt
+                    // once into the final-sized grid. One kick = no stacked prompts.
+                    if configured == 0 { kickIn = 25 }
                     configured = 1  dirty = 1
                 }
                 if obj == TOP && op == 0 {
@@ -399,7 +416,10 @@ just run {
                         ptySetSize(m, rows, cols)
                         st = gridNew(cols, rows)
                         hasSel = 0  selecting = 0
-                        fdWrite(m, fromCharCode(12), 1)   // resize wiped the grid -> Ctrl-L so the shell redraws into it
+                        // a running shell redraws on SIGWINCH (ptySetSize above); only
+                        // force Ctrl-L for resizes after the startup kick, else it
+                        // races the shell's startup and stacks/blanks the prompt.
+                        if kicked == 1 { fdWrite(m, fromCharCode(12), 1) }
                         dirty = 1
                     }
                 }
@@ -495,6 +515,12 @@ just run {
                 }
                 off = off + s
             }
+        }
+        // one-shot startup kick: once the countdown elapses, nudge the shell to
+        // reprint its prompt into the configured grid (it may have started late).
+        if kickIn > 0 {
+            kickIn = kickIn - 1
+            if kickIn == 0 { fdWrite(m, fromCharCode(12), 1)  kicked = 1  dirty = 1 }
         }
         // 2) drain pty output -> grid. Carry partial escape/UTF-8 across reads
         // (gridSafeLen) or colour/box-drawing output split mid-sequence corrupts.
