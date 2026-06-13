@@ -7,7 +7,7 @@
 // This is the .ks orchestration layer — the perf-critical grid/VT/PTY live in
 // the imported compiled .k modules; the event loop + wiring live here.
 //
-// Run:  kcc -r kghostty.ks    (needs a running Wayland compositor, e.g. Hyprland)
+// Run:  kcc -r stem_wl.ks    (needs a running Wayland compositor, e.g. Hyprland)
 
 import "k:wayland"
 import "./term.k"      // gridNew / gridFeed / gridRender
@@ -86,9 +86,11 @@ func kShiftAlpha(c, shift) {
     emit c
 }
 
-// ── render: stem grid -> framebuffer (monochrome MVP; colors = future) ───────
-func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg) {
-    fbClear(px, W, H, bg)
+// ── render: stem grid -> framebuffer. Block cursor; bell flashes the bg. ──────
+func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell) {
+    let back = bg
+    if bell == 1 { back = 3355494 }            // 0x3333 66: brief bright flash for the visual bell
+    fbClear(px, W, H, back)
     let text = gridRender(st, cols, rows)
     let n = toInt(lineCount(text))
     let i = 0
@@ -96,6 +98,17 @@ func kDrawScreen(px, W, H, font, st, cols, rows, bg, fg) {
         let line = getLine(text, i)
         fbDrawText(px, W, H, font, 4, 2 + i * 16, line, fg)
         i = i + 1
+    }
+    // block cursor (inverted cell) at gridCursor row,col
+    let cur = gridCursor(st, cols, rows)
+    let comma = indexOf(cur, ",")
+    let cr = toInt(substring(cur, 0, comma))
+    let cc = toInt(substring(cur, comma + 1, len(cur)))
+    if cr >= 0 && cr < rows && cc >= 0 && cc < cols {
+        let cx = 4 + cc * 8  let cy = 2 + cr * 16
+        fbFillRect(px, W, cx, cy, 8, 16, fg)
+        let cline = getLine(text, cr)
+        if cc < len(cline) { fbDrawChar(px, W, H, font, cx, cy, toInt(charCode(substring(cline, cc, cc + 1))), back) }
     }
 }
 
@@ -113,7 +126,7 @@ just run {
     // ── pty + shell FIRST, BEFORE wlConnect ──
     // The shell is forked here; if we connected to Wayland first, the forked
     // child would inherit the Wayland socket fd and keep the compositor
-    // connection (and thus the window) alive after kghostty exits — orphan
+    // connection (and thus the window) alive after stem exits — orphan
     // zombie windows that ignore close. Forking before connect avoids that.
     let m = ptyMaster("/dev/ptmx")
     let slave = ptySlaveName(m)
@@ -121,7 +134,7 @@ just run {
 
     // ── wayland surface (child already forked: it has no Wayland fd) ──
     let fd = wlConnect()
-    if fd < 0 { print("kghostty: wayland connect failed")  exit("1") }
+    if fd < 0 { print("stem: wayland connect failed")  exit("1") }
     let REG = 2  let COMP = 3  let SHM = 4  let WM = 5  let SEAT = 6  let KB = 7
     let SURF = 8  let XS = 9  let TOP = 10   // sequential object ids, NO gaps
     wlGetRegistry(fd, REG)
@@ -148,7 +161,8 @@ just run {
 
     let shift = 0  let ctrl = 0
     let nextId = 11  let prevBuf = 0  let prevPool = 0  let prevMfd = 0
-    let dirty = 1  let running = 1  let configured = 0  let ptyBytes = 0
+    let dirty = 1  let running = 1  let configured = 0
+    let title = "stem"  let bell = 0
     while running == 1 {
         // 1) drain wayland events (non-blocking)
         let eb = bufNew(8192)
@@ -194,9 +208,15 @@ just run {
                 off = off + s
             }
         }
-        // 2) drain pty output -> grid
+        // 2) drain pty output -> grid (+ dynamic window title from OSC 0/2)
         let out = fdRead(m, 16384)
-        if len(out) > 0 { st = gridFeed(st, out, cols, rows)  dirty = 1 }
+        if len(out) > 0 {
+            st = gridFeed(st, out, cols, rows)
+            dirty = 1
+            let nt = oscTitle(out, title)
+            if nt != title && nt != "" { title = nt  wlSetTitle(fd, TOP, title)  wlCommit(fd, SURF) }
+            if gridBell(st, cols, rows) == 1 { bell = 1 }
+        }
 
         // 3) shell exited?
         if waitChild(childPid) != 0 { running = 0 }
@@ -209,7 +229,8 @@ just run {
             let sz = stride * H
             let fb = memfdCreate(sz)
             let px = mmapShared(fb, sz)
-            kDrawScreen(px, W, H, font, st, cols, rows, bg, fg)
+            kDrawScreen(px, W, H, font, st, cols, rows, bg, fg, bell)
+            let didFlash = bell  bell = 0
             wlCreatePool(fd, SHM, pool, fb, sz)
             wlPoolCreateBuffer(fd, pool, buf, 0, W, H, stride, 1)
             wlSurfaceAttach(fd, SURF, buf, 0, 0)
@@ -217,6 +238,7 @@ just run {
             wlCommit(fd, SURF)
             prevBuf = buf  prevPool = pool  prevMfd = fb
             dirty = 0
+            if didFlash == 1 { dirty = 1 }   // bell flashed this frame -> redraw normal next frame
         }
         sleepUs(0, 8000)               // ~8ms poll
     }
